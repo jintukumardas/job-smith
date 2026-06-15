@@ -1,0 +1,357 @@
+{
+  "schemaVersion": 1,
+  "jobSearch": {
+    "enabled": true,
+    "roles": [
+      "Software Engineer",
+      "Backend Engineer",
+      "Full Stack Engineer"
+    ],
+    "keywords": [],
+    "excludeKeywords": [
+      "unpaid",
+      "commission only"
+    ],
+    "locations": [
+      "worldwide",
+      "anywhere",
+      "global",
+      "remote",
+      "work from anywhere",
+      "india"
+    ],
+    "remoteOnly": true,
+    "providers": {
+      "remotive": true,
+      "remoteok": true,
+      "wwr": true,
+      "arbeitnow": false,
+      "hn": false
+    },
+    "pollFrequencyMinutes": 180
+  },
+  "resume": {
+    "fullName": "Priya Sharma",
+    "headline": "Senior Software Engineer",
+    "summary": "Backend-leaning full-stack engineer with 6 years building reliable, scalable web services. I care about clean APIs, good tests, and shipping.",
+    "email": "priya.sharma@example.com",
+    "phone": "+91 90000 00000",
+    "location": "Bengaluru, India (Remote)",
+    "links": [
+      {
+        "label": "GitHub",
+        "url": "https://github.com/priyasharma"
+      },
+      {
+        "label": "LinkedIn",
+        "url": "https://www.linkedin.com/in/priyasharma"
+      }
+    ],
+    "skills": [
+      "TypeScript",
+      "Node.js",
+      "React",
+      "PostgreSQL",
+      "AWS",
+      "Docker",
+      "Kubernetes",
+      "GraphQL",
+      "Redis",
+      "CI/CD"
+    ],
+    "experiences": [
+      {
+        "id": "exp_1",
+        "company": "Flipside Labs",
+        "title": "Senior Software Engineer",
+        "startDate": "2022",
+        "endDate": "Present",
+        "location": "Remote",
+        "bullets": [
+          "Led migration of a monolith to Node.js microservices, cutting p95 latency by 40%.",
+          "Designed a GraphQL gateway used by 12 internal teams.",
+          "Mentored 4 engineers and introduced trunk-based CI/CD with GitHub Actions."
+        ],
+        "skills": [
+          "Node.js",
+          "GraphQL",
+          "Kubernetes",
+          "AWS",
+          "CI/CD"
+        ]
+      },
+      {
+        "id": "exp_2",
+        "company": "Acme Retail",
+        "title": "Software Engineer",
+        "startDate": "2019",
+        "endDate": "2022",
+        "location": "Bengaluru",
+        "bullets": [
+          "Built a React + TypeScript storefront serving 2M monthly users.",
+          "Optimized PostgreSQL queries, reducing checkout time by 25%.",
+          "Added end-to-end tests, raising coverage from 30% to 80%."
+        ],
+        "skills": [
+          "React",
+          "TypeScript",
+          "PostgreSQL",
+          "Redis"
+        ]
+      }
+    ],
+    "education": [
+      {
+        "institution": "Indian Institute of Technology",
+        "degree": "B.Tech, Computer Science",
+        "year": "2019"
+      }
+    ],
+    "baseResumeText": ""
+  },
+  "autofill": {
+    "enabled": true,
+    "fields": [
+      {
+        "key": "firstName",
+        "label": "First name",
+        "value": "Priya",
+        "aliases": [
+          "fname",
+          "given-name",
+          "first"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "lastName",
+        "label": "Last name",
+        "value": "Sharma",
+        "aliases": [
+          "lname",
+          "family-name",
+          "surname",
+          "last"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "fullName",
+        "label": "Full name",
+        "value": "Priya Sharma",
+        "aliases": [
+          "name",
+          "your-name",
+          "applicant-name"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "email",
+        "label": "Email",
+        "value": "priya.sharma@example.com",
+        "aliases": [
+          "e-mail",
+          "email-address",
+          "mail"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "phone",
+        "label": "Phone",
+        "value": "+91 90000 00000",
+        "aliases": [
+          "mobile",
+          "tel",
+          "telephone",
+          "phone-number",
+          "contact-number"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "address",
+        "label": "Street address",
+        "value": "",
+        "aliases": [
+          "street",
+          "address-line-1",
+          "addr"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "city",
+        "label": "City",
+        "value": "Bengaluru",
+        "aliases": [
+          "town",
+          "locality"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "state",
+        "label": "State / Region",
+        "value": "Karnataka",
+        "aliases": [
+          "region",
+          "province"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "country",
+        "label": "Country",
+        "value": "India",
+        "aliases": [
+          "nation"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "postalCode",
+        "label": "Postal / ZIP code",
+        "value": "560001",
+        "aliases": [
+          "zip",
+          "zipcode",
+          "pincode",
+          "postcode"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "linkedin",
+        "label": "LinkedIn URL",
+        "value": "https://www.linkedin.com/in/priyasharma",
+        "aliases": [
+          "linked-in",
+          "linkedin-profile",
+          "linkedin-url"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "github",
+        "label": "GitHub URL",
+        "value": "https://github.com/priyasharma",
+        "aliases": [
+          "git-hub",
+          "github-profile",
+          "github-url"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "portfolio",
+        "label": "Portfolio / Website",
+        "value": "",
+        "aliases": [
+          "website",
+          "personal-site",
+          "portfolio-url",
+          "url"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "currentCompany",
+        "label": "Current company",
+        "value": "Flipside Labs",
+        "aliases": [
+          "employer",
+          "company",
+          "organization"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "currentTitle",
+        "label": "Current title",
+        "value": "Senior Software Engineer",
+        "aliases": [
+          "job-title",
+          "position",
+          "role"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "yearsExperience",
+        "label": "Years of experience",
+        "value": "6",
+        "aliases": [
+          "experience",
+          "yoe",
+          "total-experience"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "noticePeriod",
+        "label": "Notice period",
+        "value": "30 days",
+        "aliases": [
+          "availability",
+          "notice"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "expectedSalary",
+        "label": "Expected salary",
+        "value": "",
+        "aliases": [
+          "salary",
+          "compensation",
+          "expected-ctc",
+          "ctc"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "workAuthorization",
+        "label": "Work authorization",
+        "value": "Indian citizen",
+        "aliases": [
+          "visa",
+          "authorization",
+          "work-permit"
+        ],
+        "enabled": true
+      },
+      {
+        "key": "willingToRelocate",
+        "label": "Willing to relocate",
+        "value": "Open to remote",
+        "aliases": [
+          "relocate",
+          "relocation"
+        ],
+        "enabled": true
+      }
+    ],
+    "fillButNeverSubmit": true,
+    "highlightFilled": true,
+    "perSiteDisabled": []
+  },
+  "notifications": {
+    "enabled": true,
+    "onlyNewMatches": true,
+    "maxPerBatch": 5,
+    "quietHours": null
+  },
+  "llm": {
+    "engine": "webllm",
+    "model": "Llama-3.2-3B-Instruct-q4f16_1-MLC",
+    "temperature": 0.4,
+    "enabled": true
+  },
+  "safety": {
+    "automationDisclosure": true,
+    "masterKillSwitch": false,
+    "politePolling": true
+  }
+}

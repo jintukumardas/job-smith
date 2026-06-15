@@ -1,0 +1,79 @@
+{
+  "fullName": "Priya Sharma",
+  "headline": "Senior Software Engineer",
+  "summary": "Backend-leaning full-stack engineer with 6 years building reliable, scalable web services. I care about clean APIs, good tests, and shipping.",
+  "email": "priya.sharma@example.com",
+  "phone": "+91 90000 00000",
+  "location": "Bengaluru, India (Remote)",
+  "links": [
+    {
+      "label": "GitHub",
+      "url": "https://github.com/priyasharma"
+    },
+    {
+      "label": "LinkedIn",
+      "url": "https://www.linkedin.com/in/priyasharma"
+    }
+  ],
+  "skills": [
+    "TypeScript",
+    "Node.js",
+    "React",
+    "PostgreSQL",
+    "AWS",
+    "Docker",
+    "Kubernetes",
+    "GraphQL",
+    "Redis",
+    "CI/CD"
+  ],
+  "experiences": [
+    {
+      "id": "exp_1",
+      "company": "Flipside Labs",
+      "title": "Senior Software Engineer",
+      "startDate": "2022",
+      "endDate": "Present",
+      "location": "Remote",
+      "bullets": [
+        "Led migration of a monolith to Node.js microservices, cutting p95 latency by 40%.",
+        "Designed a GraphQL gateway used by 12 internal teams.",
+        "Mentored 4 engineers and introduced trunk-based CI/CD with GitHub Actions."
+      ],
+      "skills": [
+        "Node.js",
+        "GraphQL",
+        "Kubernetes",
+        "AWS",
+        "CI/CD"
+      ]
+    },
+    {
+      "id": "exp_2",
+      "company": "Acme Retail",
+      "title": "Software Engineer",
+      "startDate": "2019",
+      "endDate": "2022",
+      "location": "Bengaluru",
+      "bullets": [
+        "Built a React + TypeScript storefront serving 2M monthly users.",
+        "Optimized PostgreSQL queries, reducing checkout time by 25%.",
+        "Added end-to-end tests, raising coverage from 30% to 80%."
+      ],
+      "skills": [
+        "React",
+        "TypeScript",
+        "PostgreSQL",
+        "Redis"
+      ]
+    }
+  ],
+  "education": [
+    {
+      "institution": "Indian Institute of Technology",
+      "degree": "B.Tech, Computer Science",
+      "year": "2019"
+    }
+  ],
+  "baseResumeText": ""
+}
