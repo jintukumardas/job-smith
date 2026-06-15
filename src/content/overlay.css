@@ -1,0 +1,34 @@
+/* Injected via chrome.scripting.insertCSS when autofill runs. Styles the
+   "filled" highlight and the automation disclosure banner. */
+
+.jobsmith-filled {
+  outline: 2px solid #2563eb !important;
+  outline-offset: 1px !important;
+  background-color: rgba(37, 99, 235, 0.06) !important;
+  transition: outline-color 0.3s ease;
+}
+
+.jobsmith-disclosure {
+  position: fixed;
+  z-index: 2147483647;
+  bottom: 16px;
+  right: 16px;
+  max-width: 320px;
+  background: #111827;
+  color: #fff;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font: 13px/1.45 system-ui, -apple-system, sans-serif;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+.jobsmith-disclosure strong {
+  color: #93c5fd;
+}
+
+.jobsmith-disclosure em {
+  display: inline-block;
+  margin-top: 4px;
+  color: #d1d5db;
+  font-style: italic;
+}
