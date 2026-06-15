@@ -1,11 +1,11 @@
 /**
- * Typed message passing between extension contexts.
- *
- * Two channels:
- *  - Background: popup/options -> service worker (runtime.sendMessage).
- *  - Tab: popup/options -> injected content script (tabs.sendMessage).
+ * Typed message passing for the Background channel (popup/options -> service
+ * worker via runtime.sendMessage) and the Offscreen channel (-> the WebLLM
+ * offscreen document). The page<->content-script interaction does not use
+ * messaging — the popup drives the content API directly via chrome.scripting so
+ * it can target and aggregate across all frames.
  */
-import type { AutofillField, ProviderState } from "../types/index.js";
+import type { ProviderState } from "../types/index.js";
 
 /* ------------------------------ Shared payloads --------------------------- */
 
@@ -22,11 +22,6 @@ export interface CapturedJd {
   title: string;
   url: string;
   company?: string;
-}
-
-export interface AutofillRunOptions {
-  highlight: boolean;
-  disclosure: boolean;
 }
 
 /* ----------------------------- Background channel ------------------------- */
@@ -49,20 +44,58 @@ export type BgResponse =
   | { type: "OK" }
   | { type: "ERROR"; error: string };
 
-/* -------------------------------- Tab channel ---------------------------- */
+/* ------------------------------ Offscreen channel ------------------------ */
 
-export type TabRequest =
-  | { type: "PING" }
-  | { type: "AUTOFILL"; fields: AutofillField[]; options: AutofillRunOptions }
-  | { type: "CAPTURE_JD" }
-  | { type: "CLEAR_HIGHLIGHTS" };
+/** A page form field the deterministic matcher couldn't map, for the LLM. */
+export interface FieldForLlm {
+  /** Global ref: `${frameId}:${localRef}`. */
+  ref: string;
+  label: string;
+  type: string;
+  options?: string[];
+}
 
-export type TabResponse =
-  | { type: "PONG" }
-  | { type: "AUTOFILL_RESULT"; report: FilledFieldReport[]; skipped: number; siteDisabled?: boolean }
-  | { type: "JD"; jd: CapturedJd }
-  | { type: "OK" }
-  | { type: "ERROR"; error: string };
+export interface MapFieldsRequest {
+  target: "offscreen";
+  type: "MAP_FIELDS";
+  fields: FieldForLlm[];
+}
+
+export interface MapFieldsResponse {
+  /** ref -> value. */
+  map: Record<string, string>;
+  engine: "webllm" | "none";
+  note?: string;
+  error?: string;
+}
+
+export function sendToOffscreen(req: MapFieldsRequest): Promise<MapFieldsResponse> {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(req, (resp: MapFieldsResponse) => {
+        const err = chrome.runtime.lastError;
+        if (err) resolve({ map: {}, engine: "none", error: err.message ?? "unknown error" });
+        else resolve(resp ?? { map: {}, engine: "none", error: "no response" });
+      });
+    } catch (e) {
+      resolve({ map: {}, engine: "none", error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+}
+
+export function onOffscreenMessage(
+  handler: (req: MapFieldsRequest) => Promise<MapFieldsResponse>,
+): void {
+  chrome.runtime.onMessage.addListener((req: MapFieldsRequest, _sender, sendResponse) => {
+    if (req?.target !== "offscreen") return false; // not ours
+    handler(req)
+      .then(sendResponse)
+      .catch((e) =>
+        sendResponse({ map: {}, engine: "none", error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true;
+  });
+}
 
 /* -------------------------------- Senders -------------------------------- */
 
@@ -80,20 +113,6 @@ export function sendToBackground(req: BgRequest): Promise<BgResponse> {
   });
 }
 
-export function sendToTab(tabId: number, req: TabRequest): Promise<TabResponse> {
-  return new Promise((resolve) => {
-    try {
-      chrome.tabs.sendMessage(tabId, req, (resp: TabResponse) => {
-        const err = chrome.runtime.lastError;
-        if (err) resolve({ type: "ERROR", error: err.message ?? "unknown error" });
-        else resolve(resp ?? { type: "ERROR", error: "no response" });
-      });
-    } catch (e) {
-      resolve({ type: "ERROR", error: e instanceof Error ? e.message : String(e) });
-    }
-  });
-}
-
 /* ------------------------------- Receivers ------------------------------- */
 
 /** Register an async background message handler. */
@@ -101,23 +120,13 @@ export function onBackgroundMessage(
   handler: (req: BgRequest) => Promise<BgResponse>,
 ): void {
   chrome.runtime.onMessage.addListener((req: BgRequest, _sender, sendResponse) => {
+    // Offscreen-targeted messages are handled by the offscreen document only.
+    if ((req as { target?: string })?.target === "offscreen") return false;
     handler(req)
       .then(sendResponse)
       .catch((e) =>
         sendResponse({ type: "ERROR", error: e instanceof Error ? e.message : String(e) }),
       );
     return true; // keep the message channel open for async response
-  });
-}
-
-/** Register an async content-script message handler. */
-export function onTabMessage(handler: (req: TabRequest) => Promise<TabResponse>): void {
-  chrome.runtime.onMessage.addListener((req: TabRequest, _sender, sendResponse) => {
-    handler(req)
-      .then(sendResponse)
-      .catch((e) =>
-        sendResponse({ type: "ERROR", error: e instanceof Error ? e.message : String(e) }),
-      );
-    return true;
   });
 }

@@ -15,6 +15,8 @@ export interface FieldDescriptor {
   labelText: string;
   autocomplete: string;
   type: string;
+  /** ATS data-* hooks (data-automation-id, data-qa, data-test, data-testid). */
+  testId: string;
 }
 
 export interface ProfileFieldDef {
@@ -89,11 +91,12 @@ export function scoreFieldMatch(desc: FieldDescriptor, field: ProfileFieldDef): 
     desc.placeholder,
     desc.ariaLabel,
     desc.labelText,
+    desc.testId,
   );
   const descCollapsed = collapse(
-    [desc.name, desc.id, desc.placeholder, desc.ariaLabel, desc.labelText].join(" "),
+    [desc.name, desc.id, desc.placeholder, desc.ariaLabel, desc.labelText, desc.testId].join(" "),
   );
-  const nameId = [collapse(desc.name), collapse(desc.id)];
+  const nameId = [collapse(desc.name), collapse(desc.id), collapse(desc.testId)].filter(Boolean);
 
   let best = 0;
   for (const raw of terms(field)) {

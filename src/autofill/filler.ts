@@ -82,6 +82,64 @@ export function clearHighlights(): void {
     .forEach((el) => el.classList.remove(HIGHLIGHT_CLASS));
 }
 
+const REF_ATTR = "data-jobsmith-ref";
+
+export interface CollectedField {
+  /** Stable per-frame ref, written to the element so applyValueMap can find it. */
+  ref: string;
+  label: string;
+  name: string;
+  type: string;
+  /** For <select>, the visible option labels (so the model can pick one). */
+  options?: string[];
+}
+
+/**
+ * Collect EMPTY fillable controls the deterministic matcher could NOT map, so an
+ * LLM can decide values for them. Each control is tagged with a ref attribute.
+ */
+export function collectUnmatchedFields(fields: AutofillField[]): CollectedField[] {
+  const defs: ProfileFieldDef[] = fields
+    .filter((f) => f.enabled)
+    .map((f) => ({ key: f.key, label: f.label, aliases: f.aliases }));
+
+  const out: CollectedField[] = [];
+  let i = 0;
+  for (const el of collectControls()) {
+    if (hasValue(el)) continue;
+    const desc = describe(el);
+    if (bestFieldMatch(desc, defs)) continue; // deterministic will handle it
+    const label = describeControl(desc);
+    if (!label) continue;
+    const ref = `f${i++}`;
+    el.setAttribute(REF_ATTR, ref);
+    const field: CollectedField = { ref, label, name: desc.name, type: desc.type };
+    if (el instanceof HTMLSelectElement) {
+      field.options = Array.from(el.options)
+        .map((o) => o.text.trim())
+        .filter(Boolean)
+        .slice(0, 40);
+    }
+    out.push(field);
+  }
+  return out;
+}
+
+/** Apply a ref->value map produced by the LLM. Returns how many were filled. */
+export function applyValueMap(map: Record<string, string>, highlight: boolean): number {
+  let filled = 0;
+  for (const [ref, value] of Object.entries(map)) {
+    if (!value || !value.trim()) continue;
+    const el = document.querySelector<Fillable>(`[${REF_ATTR}="${cssEscape(ref)}"]`);
+    if (!el || hasValue(el)) continue;
+    if (applyValue(el, value)) {
+      if (highlight) markFilled(el);
+      filled += 1;
+    }
+  }
+  return filled;
+}
+
 /* ------------------------------- collection ------------------------------ */
 
 function collectControls(): Fillable[] {
@@ -128,6 +186,12 @@ function describe(el: Fillable): FieldDescriptor {
     labelText: getLabelText(el),
     autocomplete: el.getAttribute("autocomplete") ?? "",
     type: (el as HTMLInputElement).type ?? "text",
+    testId:
+      el.getAttribute("data-automation-id") ??
+      el.getAttribute("data-qa") ??
+      el.getAttribute("data-test") ??
+      el.getAttribute("data-testid") ??
+      "",
   };
 }
 

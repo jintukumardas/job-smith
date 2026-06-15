@@ -76,6 +76,15 @@ export class WebLLMEngine implements ResumeEngine {
     return { summary, bullets, notes };
   }
 
+  /** Generic single-shot generation (used by the autofill field mapper). */
+  async generate(
+    messages: ChatMessage[],
+    opts: { maxTokens: number; temperature: number; onProgress?: (p: number, t: string) => void },
+  ): Promise<string> {
+    await this.init(opts.onProgress);
+    return this.chat(messages, opts.temperature, opts.maxTokens);
+  }
+
   dispose(): void {
     for (const p of this.pending.values()) {
       if (p.timer) clearTimeout(p.timer);

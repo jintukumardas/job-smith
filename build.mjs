@@ -29,6 +29,7 @@ const entryPoints = {
   content: "src/content/autofill-content.ts",
   popup: "src/popup/popup.ts",
   options: "src/options/options.ts",
+  offscreen: "src/offscreen/offscreen.ts",
   "llm.worker": "src/resume/llm.worker.ts",
 };
 
@@ -38,6 +39,7 @@ const staticCopies = [
   ["src/popup/popup.css", "popup.css"],
   ["src/options/options.html", "options.html"],
   ["src/options/options.css", "options.css"],
+  ["src/offscreen/offscreen.html", "offscreen.html"],
   ["src/content/overlay.css", "overlay.css"],
 ];
 

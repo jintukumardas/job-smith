@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Privacy-first job search: tracks remote listings, tailors your resume on-device (WebLLM), and politely auto-fills applications. All data stays local.",
   "minimum_chrome_version": "120",
-  "permissions": ["storage", "alarms", "notifications", "scripting", "activeTab"],
+  "permissions": ["storage", "alarms", "notifications", "scripting", "activeTab", "offscreen"],
   "host_permissions": [
     "https://remotive.com/*",
     "https://www.arbeitnow.com/*",

@@ -1,56 +1,81 @@
 /**
- * Content script — injected ON DEMAND (never statically) when you click an
- * action in the popup. It fills the current form, captures a job description,
- * or clears highlights. It shows a visible disclosure that automation ran and
- * NEVER submits anything.
+ * Content script — injected ON DEMAND (never statically) into the active tab and
+ * ALL its frames when you click an action in the popup. It exposes a small API on
+ * the isolated-world `window` so the popup can drive it via chrome.scripting and
+ * aggregate results across frames (which matters for iframe-embedded ATS forms
+ * like Greenhouse).
+ *
+ * It fills the form, captures a job description, or clears highlights. It shows a
+ * visible disclosure that automation ran and NEVER submits anything.
  */
-import { onTabMessage, type TabResponse, type CapturedJd } from "../lib/messaging.js";
-import { fillForm, clearHighlights } from "../autofill/filler.js";
+import {
+  fillForm,
+  clearHighlights,
+  collectUnmatchedFields,
+  applyValueMap,
+  type FillResult,
+  type CollectedField,
+} from "../autofill/filler.js";
+import type { AutofillField } from "../types/index.js";
+import type { CapturedJd } from "../lib/messaging.js";
 import { createLogger } from "../lib/logger.js";
 
 const log = createLogger("content");
 
+export interface FillPayload {
+  fields: AutofillField[];
+  highlight: boolean;
+  disclosure: boolean;
+}
+
+export interface JobSmithContentApi {
+  fill(payload: FillPayload): FillResult;
+  collect(fields: AutofillField[]): CollectedField[];
+  applyMap(payload: { map: Record<string, string>; highlight: boolean }): number;
+  captureJd(): CapturedJd;
+  clear(): void;
+}
+
 declare global {
   interface Window {
-    __jobsmithInjected?: boolean;
+    __jobsmith?: JobSmithContentApi;
   }
 }
 
-// Guard against duplicate listeners when injected more than once.
-if (!window.__jobsmithInjected) {
-  window.__jobsmithInjected = true;
-
-  onTabMessage(async (req): Promise<TabResponse> => {
-    try {
-      switch (req.type) {
-        case "PING":
-          return { type: "PONG" };
-
-        case "AUTOFILL": {
-          const { report, skipped } = fillForm(req.fields, req.options.highlight);
-          if (req.options.disclosure && report.length > 0) showDisclosure(report.length, skipped);
-          log.info(`autofilled ${report.length} field(s), skipped ${skipped}`);
-          return { type: "AUTOFILL_RESULT", report, skipped };
-        }
-
-        case "CAPTURE_JD":
-          return { type: "JD", jd: captureJd() };
-
-        case "CLEAR_HIGHLIGHTS":
-          clearHighlights();
-          removeDisclosure();
-          return { type: "OK" };
-
-        default:
-          return { type: "ERROR", error: "unknown request" };
-      }
-    } catch (e) {
-      log.error("content handler failed", e);
-      return { type: "ERROR", error: e instanceof Error ? e.message : String(e) };
+const api: JobSmithContentApi = {
+  fill(payload) {
+    const result = fillForm(payload.fields, payload.highlight);
+    // Only show the disclosure once, in the top frame.
+    if (payload.disclosure && result.report.length > 0 && isTopFrame()) {
+      showDisclosure(result.report.length, result.skipped);
     }
-  });
+    return result;
+  },
+  collect(fields) {
+    return collectUnmatchedFields(fields);
+  },
+  applyMap({ map, highlight }) {
+    return applyValueMap(map, highlight);
+  },
+  captureJd() {
+    return captureJd();
+  },
+  clear() {
+    clearHighlights();
+    removeDisclosure();
+  },
+};
 
-  log.debug("content script ready");
+// Install once per frame; re-injection just refreshes the reference.
+window.__jobsmith = api;
+log.debug("content api ready");
+
+function isTopFrame(): boolean {
+  try {
+    return window.top === window.self;
+  } catch {
+    return false;
+  }
 }
 
 /* ------------------------------ JD capture ------------------------------- */
@@ -68,7 +93,7 @@ const JD_SELECTORS = [
 ];
 
 function captureJd(): CapturedJd {
-  const best = picklargestText(JD_SELECTORS);
+  const best = pickLargestText(JD_SELECTORS);
   const fallback = (document.body?.innerText ?? "").trim();
   const text = (best.length > 200 ? best : fallback).slice(0, 20_000);
   const jd: CapturedJd = {
@@ -81,7 +106,7 @@ function captureJd(): CapturedJd {
   return jd;
 }
 
-function picklargestText(selectors: string[]): string {
+function pickLargestText(selectors: string[]): string {
   let best = "";
   for (const sel of selectors) {
     let nodes: NodeListOf<HTMLElement>;
@@ -94,7 +119,7 @@ function picklargestText(selectors: string[]): string {
       const text = (node.innerText ?? "").trim();
       if (text.length > best.length) best = text;
     }
-    if (best.length > 1200) break; // good enough
+    if (best.length > 1200) break;
   }
   return best;
 }
@@ -104,9 +129,7 @@ function firstHeading(): string {
 }
 
 function guessCompany(): string | undefined {
-  const meta = document
-    .querySelector('meta[property="og:site_name"]')
-    ?.getAttribute("content");
+  const meta = document.querySelector('meta[property="og:site_name"]')?.getAttribute("content");
   if (meta) return meta.trim().slice(0, 80);
   const el = document.querySelector<HTMLElement>('[class*="company" i], [data-testid*="company" i]');
   const text = el?.innerText?.trim();
@@ -122,8 +145,6 @@ function showDisclosure(filled: number, skipped: number): void {
   const banner = document.createElement("div");
   banner.id = DISCLOSURE_ID;
   banner.className = "jobsmith-disclosure";
-  // Inline fallback styles so the disclosure is visible even if the stylesheet
-  // was not injected.
   Object.assign(banner.style, {
     position: "fixed",
     zIndex: "2147483647",
