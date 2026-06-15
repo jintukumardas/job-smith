@@ -34,7 +34,8 @@ auto-fills application forms — *without* the bot-like behavior that gets peopl
 | Area | What it does |
 | --- | --- |
 | **Job notifications** | Polls public remote-job sources on a schedule and sends a desktop notification when new listings match your role/location/keyword criteria. Fully configurable; per-source rate limits enforced. |
-| **Résumé tailoring** | Parses a job description, finds your matching/missing skills, and rewrites a tailored résumé **locally** — either with an in-browser LLM (WebLLM/WebGPU) or a deterministic offline engine. Outputs Markdown you can copy or download. |
+| **Résumé tailoring** | Parses a job description, finds your matching/missing skills, and rewrites a tailored résumé **locally** — either with an in-browser LLM (WebLLM/WebGPU) or a deterministic offline engine. Export a clean **ATS-friendly PDF** (single column, selectable text, optional company accent colour), or copy/download Markdown. |
+| **Paste-to-fill résumé** | Paste your whole résumé once; JobSmith extracts name, contact, location and skills into structured fields (one click), which then feed both tailoring and autofill. |
 | **Auto-fill** | On click, fills empty application fields using values **derived automatically from your résumé** (name, email, phone, location, links, current role) — explicit overrides still win. Matches by `autocomplete`, name/id, label, and ATS `data-*` hooks, and injects into **all frames** so iframe-embedded forms (Greenhouse) work. **Never overwrites your input. Never submits. Never clicks buttons.** |
 | **Smart Fill (AI)** | For fields the matcher can't recognize, the on-device LLM reads their labels and maps them to your résumé (strictly from your data — no fabrication). Runs in an offscreen WebGPU worker; falls back gracefully when unavailable. |
 | **Application tracker** | Log saved/applied roles, statuses, dates, notes and follow-up reminders. Export to JSON/CSV. |
@@ -125,11 +126,18 @@ Configure criteria → JobSmith polls in the background → you get a notificati
 matches → click it to open the listing. The popup shows the latest matches with **Open**,
 **Tailor**, and **Track** actions; the toolbar badge shows how many are new.
 
+**Set up your résumé once**
+Settings → **Résumé**: fill the fields, or just paste your whole résumé into **Base resume text**
+and click **Import details from pasted text** — JobSmith extracts your name, contact, location and
+skills into the fields (review/edit, then Save). Those values power both tailoring and autofill.
+
 **Tailor your résumé to a posting**
 On a job page, open the popup and click **Tailor resume** — JobSmith captures the JD and opens
 the Résumé Studio with it pre-filled. Or click **Tailor** on any listing in the popup. Hit
-**Tailor resume**, review the match score / matched / missing skills, then **Copy** or
-**Download .md**. Optionally **Save as application** to start tracking it.
+**Tailor resume**, review the match score / matched / missing skills, then **Save as PDF
+(ATS-friendly)** — pick an accent colour to match the company; the body stays single-column and
+selectable so applicant-tracking systems parse it cleanly. You can also **Copy**, **Download .md**,
+or **Save as application**.
 
 **Auto-fill an application**
 On a careers/application page, open the popup and click **Autofill form**. JobSmith fills the
@@ -275,7 +283,10 @@ After `npm run dev`, reload the extension at `chrome://extensions` to pick up ch
 - **JD capture is heuristic.** Pages vary; if capture misses, paste the JD into Résumé Studio.
 - **HN parsing is best-effort.** Free-text posts don't have clean fields; that source is off by
   default.
-- **Résumé import is structured, not PDF.** Enter your résumé as fields (or paste text). This
+- **PDF export favours ATS-safety over heavy branding.** The exported PDF is single-column with
+  selectable text and standard fonts (what parsers read reliably); company "theme" is limited to a
+  tasteful accent colour. Multi-column, graphic-heavy templates look nicer but get mangled by ATS.
+- **Résumé import is structured, not PDF-parsed.** Enter your résumé as fields (or paste text). This
   gives the tailoring engine clean data and avoids brittle PDF parsing.
 - **Is my data really local?** Yes. Inspect `lib/storage.ts` (everything is `chrome.storage.local`)
   and the network calls in `jobs/providers/*` and `resume/llm.worker.ts`. There is no backend.
