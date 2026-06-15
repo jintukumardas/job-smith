@@ -156,21 +156,43 @@ async function doAutofill(): Promise<void> {
   const gate = await gateAutofill();
   if (!gate) return;
   const fields = resolveAutofillFields(settings);
+  if (!hasFillValues(fields)) {
+    flash(gate.status, "Nothing to fill yet — add your résumé in Settings → Résumé.", "err");
+    return;
+  }
   const results = await execAllFrames(gate.tab.id!, FILL_FN, [
     { fields, highlight: settings.autofill.highlightFilled, disclosure: settings.safety.automationDisclosure },
   ]);
   const filled = sumReports(results);
   flash(
     gate.status,
-    filled > 0 ? `Filled ${filled} field(s). Review before submitting.` : "No matching empty fields found.",
+    filled > 0
+      ? `Filled ${filled} field(s). Review before submitting.`
+      : "No matching empty fields found on this page. Try Smart Fill (AI).",
     filled > 0 ? "ok" : "err",
   );
+}
+
+function hasFillValues(fields: AutofillField[]): boolean {
+  return fields.some((f) => f.enabled && f.value.trim().length > 0);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 async function doSmartFill(): Promise<void> {
   const gate = await gateAutofill();
   if (!gate) return;
   const fields = resolveAutofillFields(settings);
+  if (!hasFillValues(fields)) {
+    flash(gate.status, "Add your résumé in Settings → Résumé first — the AI fills from it.", "err");
+    return;
+  }
+  if (!settings.llm.enabled) {
+    flash(gate.status, "On-device AI is off. Enable it in Settings → Résumé studio.", "err");
+    return;
+  }
 
   // 1) deterministic fill first.
   const fillResults = await execAllFrames(gate.tab.id!, FILL_FN, [
@@ -197,17 +219,30 @@ async function doSmartFill(): Promise<void> {
     return;
   }
 
-  flash(gate.status, `Filled ${deterministic}. Asking on-device AI about ${llmFields.length} more…`, "ok");
+  flash(
+    gate.status,
+    `Filled ${deterministic}. Loading on-device AI for ${llmFields.length} more (first run downloads the model)…`,
+    "ok",
+  );
 
   // 3) run the on-device model in the offscreen document.
-  await ensureOffscreen();
-  const resp = await sendToOffscreen({ target: "offscreen", type: "MAP_FIELDS", fields: llmFields });
+  const offErr = await ensureOffscreen();
+  if (offErr) {
+    flash(gate.status, `Filled ${deterministic}. AI unavailable: ${offErr}`, "err");
+    return;
+  }
+
+  const req = { target: "offscreen" as const, type: "MAP_FIELDS" as const, fields: llmFields };
+  let resp = await sendToOffscreen(req);
+  // The offscreen listener may not be ready on the very first creation; retry once.
+  if (resp.error && /establish connection|receiving end|port closed/i.test(resp.error)) {
+    await delay(500);
+    resp = await sendToOffscreen(req);
+  }
   if (resp.engine === "none") {
-    flash(
-      gate.status,
-      `Filled ${deterministic} field(s). AI mapping unavailable${resp.note ? ` (${resp.note})` : ""}.`,
-      "err",
-    );
+    const why = resp.error || resp.note || "unknown";
+    log.warn("smart fill: AI unavailable", resp);
+    flash(gate.status, `Filled ${deterministic} field(s). AI mapping unavailable (${why}).`, "err");
     return;
   }
 
@@ -238,17 +273,24 @@ async function doSmartFill(): Promise<void> {
   );
 }
 
-async function ensureOffscreen(): Promise<void> {
+/** Ensure the offscreen document exists. Returns null on success, else a reason. */
+async function ensureOffscreen(): Promise<string | null> {
   try {
-    const has = await chrome.offscreen.hasDocument();
-    if (has) return;
+    if (!chrome.offscreen || typeof chrome.offscreen.createDocument !== "function") {
+      return "offscreen API unavailable — reload the extension at chrome://extensions";
+    }
+    if (await chrome.offscreen.hasDocument()) return null;
     await chrome.offscreen.createDocument({
       url: "offscreen.html",
-      reasons: [chrome.offscreen.Reason.WORKERS],
+      reasons: ["WORKERS" as chrome.offscreen.Reason],
       justification: "Run the on-device LLM to map application form fields to your resume locally.",
     });
+    return null;
   } catch (e) {
-    log.debug("offscreen ensure", e); // likely already exists
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/single offscreen|already/i.test(msg)) return null; // created concurrently
+    log.warn("offscreen create failed", msg);
+    return msg;
   }
 }
 
