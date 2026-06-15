@@ -247,6 +247,8 @@ export interface JdAnalysis {
 export interface TailoredResume {
   /** Markdown rendering of the tailored resume. */
   markdown: string;
+  /** ATS-friendly HTML body (single column, selectable text) for PDF export. */
+  html: string;
   /** Which engine produced it. */
   engine: ResumeEngineKind;
   /** Skills surfaced because they matched the JD. */
