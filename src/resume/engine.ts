@@ -1,9 +1,19 @@
 /**
  * Resume-tailoring engine contract. Two implementations:
- *  - {@link DeterministicEngine} — always available, offline, rule-based.
- *  - WebLLMEngine — on-device LLM (WebGPU), graceful fallback to deterministic.
+ *  - WebLLMEngine — an on-device LLM (WebGPU) that AUTHORS the tailored resume.
+ *  - DeterministicEngine — always-available offline fallback (rule-based).
+ *
+ * Both return a {@link TailoredContent} that the renderer turns into Markdown,
+ * ATS-friendly HTML and a PDF.
  */
-import type { JdAnalysis, ResumeData, ResumeEngineKind } from "../types/index.js";
+import type {
+  JdAnalysis,
+  ResumeData,
+  ResumeEducation,
+  ResumeEngineKind,
+  ResumeExperience,
+  ResumeLink,
+} from "../types/index.js";
 
 export interface EngineProgress {
   phase: "loading-model" | "generating" | "done";
@@ -13,10 +23,11 @@ export interface EngineProgress {
 }
 
 export interface TailorRequest {
+  /** Resume already enriched from pasted text (see parse-resume `enrichResume`). */
   resume: ResumeData;
   jd: string;
   analysis: JdAnalysis;
-  /** Canonical skills the resume already has (normalized). */
+  /** Canonical skills the resume actually evidences. */
   resumeSkills: string[];
   matchedSkills: string[];
   missingSkills: string[];
@@ -25,32 +36,74 @@ export interface TailorRequest {
   signal?: AbortSignal;
 }
 
-export interface EngineTailorResult {
-  /** Tailored professional summary (plain text). */
+/** The full, tailored resume content an engine produces. */
+export interface TailoredContent {
+  fullName: string;
+  headline: string;
+  email: string;
+  phone: string;
+  location: string;
+  links: ResumeLink[];
   summary: string;
-  /** Optional rewritten bullets keyed by experience id. */
-  bullets?: Record<string, string[]>;
+  /** Skills, most relevant first. */
+  skills: string[];
+  experiences: ResumeExperience[];
+  education: ResumeEducation[];
+}
+
+export interface EngineTailorResult {
+  content: TailoredContent;
   notes: string[];
 }
 
 export interface ResumeEngine {
   readonly kind: ResumeEngineKind;
-  /** Cheap capability probe; WebLLM checks for WebGPU. */
   isAvailable(): Promise<boolean>;
   tailor(req: TailorRequest): Promise<EngineTailorResult>;
-  /** Release resources (terminate workers, etc.). */
   dispose(): void;
 }
 
-/** Compact, model-friendly serialization of resume experiences. */
-export function summarizeExperiences(resume: ResumeData, max = 4): string {
-  return resume.experiences
-    .slice(0, max)
-    .map((e) => {
-      const dates = [e.startDate, e.endDate].filter(Boolean).join("–");
-      const head = `${e.title} at ${e.company}${dates ? ` (${dates})` : ""}`;
-      const bullets = e.bullets.slice(0, 4).map((b) => `  - ${b}`).join("\n");
-      return bullets ? `${head}\n${bullets}` : head;
-    })
-    .join("\n");
+/** Identity/contact fields are taken verbatim from the resume, never authored. */
+export function identityFrom(
+  resume: ResumeData,
+): Pick<TailoredContent, "fullName" | "headline" | "email" | "phone" | "location" | "links"> {
+  return {
+    fullName: resume.fullName,
+    headline: resume.headline,
+    email: resume.email,
+    phone: resume.phone,
+    location: resume.location,
+    links: resume.links,
+  };
+}
+
+/** Build the source text the LLM reads (prefers the user's pasted resume). */
+export function serializeResumeForLlm(resume: ResumeData): string {
+  const text = resume.baseResumeText.trim() ? resume.baseResumeText : serializeStructured(resume);
+  return text.slice(0, 8000);
+}
+
+function serializeStructured(resume: ResumeData): string {
+  const p: string[] = [];
+  if (resume.fullName) p.push(resume.fullName);
+  const contact = [resume.email, resume.phone, resume.location].filter(Boolean).join(" | ");
+  if (contact) p.push(contact);
+  if (resume.headline) p.push(resume.headline);
+  if (resume.summary) p.push(`SUMMARY\n${resume.summary}`);
+  if (resume.skills.length) p.push(`SKILLS\n${resume.skills.join(", ")}`);
+  if (resume.experiences.length) {
+    p.push("EXPERIENCE");
+    for (const e of resume.experiences) {
+      const dates = [e.startDate, e.endDate].filter(Boolean).join(" - ");
+      p.push(`${e.title}${e.company ? ` at ${e.company}` : ""}${dates ? ` (${dates})` : ""}`);
+      for (const b of e.bullets) p.push(`- ${b}`);
+    }
+  }
+  if (resume.education.length) {
+    p.push("EDUCATION");
+    for (const ed of resume.education) {
+      p.push([ed.degree, ed.institution, ed.year].filter(Boolean).join(", "));
+    }
+  }
+  return p.join("\n");
 }

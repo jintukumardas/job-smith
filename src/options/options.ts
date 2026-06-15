@@ -571,7 +571,7 @@ function renderStudio(): HTMLElement {
     llm.engine === "webllm"
       ? h("div", {
           class: "note info",
-          text: "On-device LLM (WebLLM): the first run downloads the model (~GBs) from the public model CDN and caches it. Your resume + the JD are processed locally and never uploaded. Falls back to the offline engine automatically if WebGPU is unavailable.",
+          text: "On-device LLM (WebLLM) reads your résumé + the JD and writes the full tailored résumé locally. The first run downloads the model (~GBs) from the public model CDN and caches it; your data is never uploaded. It uses only facts from your résumé (skills it can't support are filtered out), and falls back to the offline engine if WebGPU is unavailable.",
         })
       : h("div", {
           class: "note info",

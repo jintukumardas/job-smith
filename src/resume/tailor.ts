@@ -6,12 +6,12 @@
  * A warm WebLLM engine is cached per-model so repeated tailoring in one page
  * session does not reload the model.
  */
-import type { ResumeData, ResumeExperience, Settings, TailoredResume } from "../types/index.js";
-import type { EngineProgress, ResumeEngine } from "./engine.js";
+import type { ResumeData, Settings, TailoredResume } from "../types/index.js";
+import type { EngineProgress, EngineTailorResult, ResumeEngine, TailorRequest } from "./engine.js";
 import { extractJd } from "./jd-parser.js";
 import { enrichResume } from "./parse-resume.js";
 import { detectSkills, normalizeSkill, sameSkill } from "./skills.js";
-import { DeterministicEngine } from "./deterministic.js";
+import { DeterministicEngine, composeSummary } from "./deterministic.js";
 import { WebLLMEngine } from "./webllm.js";
 import { renderResumeMarkdown, renderResumeHtml, type RenderedExperience } from "./render.js";
 import { tokenize, uniqCi } from "../lib/util.js";
@@ -89,85 +89,82 @@ export async function tailorResume(
   settings: Settings,
   options: TailorOptions = {},
 ): Promise<TailoredResume> {
-  resume = enrichResume(resume); // fill empty fields from pasted base text
+  resume = enrichResume(resume); // fill empty fields/experience from pasted base text
   const analysis = extractJd(jdText);
   const { matched, missing, resumeSkills } = computeSkillMatch(resume, analysis.skills);
 
-  const { engine, fellBack } = await resolveEngine(settings, options.forceEngine);
+  const req: TailorRequest = {
+    resume,
+    jd: jdText,
+    analysis,
+    resumeSkills,
+    matchedSkills: matched,
+    missingSkills: missing,
+    temperature: settings.llm.temperature,
+    ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
+  };
 
-  let engineResult;
+  const { engine, fellBack } = await resolveEngine(settings, options.forceEngine);
+  const extraNotes: string[] = [];
+  let engineKind: "webllm" | "deterministic" = fellBack ? "deterministic" : engine.kind;
+
+  let result: EngineTailorResult;
   try {
-    engineResult = await engine.tailor({
-      resume,
-      jd: jdText,
-      analysis,
-      resumeSkills,
-      matchedSkills: matched,
-      missingSkills: missing,
-      temperature: settings.llm.temperature,
-      ...(options.onProgress ? { onProgress: options.onProgress } : {}),
-      ...(options.signal ? { signal: options.signal } : {}),
-    });
+    result = await engine.tailor(req);
   } catch (e) {
     if (engine.kind === "webllm") {
-      log.warn("WebLLM tailoring failed; retrying with deterministic engine", e);
-      engineResult = await deterministic.tailor({
-        resume,
-        jd: jdText,
-        analysis,
-        resumeSkills,
-        matchedSkills: matched,
-        missingSkills: missing,
-        temperature: settings.llm.temperature,
-        ...(options.onProgress ? { onProgress: options.onProgress } : {}),
-      });
-      engineResult.notes.unshift("On-device model failed to run; used the offline engine instead.");
-      return assemble(resume, analysis, matched, missing, resumeSkills, engineResult, "deterministic");
+      log.warn("WebLLM tailoring failed; using the deterministic engine", e);
+      result = await deterministic.tailor(req);
+      extraNotes.push("On-device model failed to run; used the offline engine instead.");
+      engineKind = "deterministic";
+    } else {
+      throw e;
     }
-    throw e;
   }
+  if (fellBack) extraNotes.unshift("WebLLM was unavailable; used the offline engine instead.");
 
-  const notes = [...engineResult.notes];
-  if (fellBack) notes.unshift("WebLLM was unavailable; used the offline engine instead.");
-  return assemble(
-    resume,
-    analysis,
-    matched,
-    missing,
-    resumeSkills,
-    { ...engineResult, notes },
-    fellBack ? "deterministic" : engine.kind,
-  );
+  return assemble(req, result, extraNotes, engineKind);
 }
 
 /* ------------------------------- assembly -------------------------------- */
 
 function assemble(
-  resume: ResumeData,
-  analysis: ReturnType<typeof extractJd>,
-  matched: string[],
-  missing: string[],
-  resumeSkills: string[],
-  engineResult: { summary: string; bullets?: Record<string, string[]>; notes: string[] },
+  req: TailorRequest,
+  result: EngineTailorResult,
+  extraNotes: string[],
   engineKind: "webllm" | "deterministic",
 ): TailoredResume {
-  const terms = new Set<string>(
-    [...analysis.keywords, ...analysis.skills, ...matched].map((t) => t.toLowerCase()),
-  );
+  const { resume, analysis, matchedSkills: matched, missingSkills: missing, resumeSkills } = req;
+  const content = result.content;
+  const notes = [...result.notes];
 
-  const experiences: RenderedExperience[] = resume.experiences.map((exp) => ({
+  // Keep only skills the candidate actually has (drop anything invented / any JD gap).
+  const realSkills = content.skills.filter(
+    (s) => resumeSkills.some((rs) => sameSkill(rs, s)) && !missing.some((m) => sameSkill(m, s)),
+  );
+  const orderedSkills = uniqCi([...matched, ...realSkills]).slice(0, 18);
+
+  // Anti-fabrication: if the summary claims a skill the candidate lacks, replace
+  // it with a truthful, deterministic summary.
+  let summary = content.summary.trim() || resume.summary.trim();
+  const summarySkills = detectSkills(summary);
+  if (missing.some((m) => summarySkills.some((s) => sameSkill(s, m)))) {
+    summary = composeSummary(req);
+    notes.push("Adjusted the summary to avoid claiming skills not in your resume.");
+  }
+
+  const experiences: RenderedExperience[] = content.experiences.map((exp) => ({
     exp,
-    bullets: engineResult.bullets?.[exp.id] ?? reorderBullets(exp, terms),
+    bullets: exp.bullets,
   }));
 
-  const orderedSkills = uniqCi([
-    ...matched,
-    ...resumeSkills.filter((s) => !matched.some((m) => sameSkill(m, s))),
-  ]).slice(0, 18);
-
-  const summary = engineResult.summary.trim() || resume.summary.trim();
-
-  const renderInput = { resume, summary, orderedSkills, experiences };
+  const renderResume: ResumeData = {
+    ...content,
+    skills: orderedSkills,
+    baseResumeText: "",
+  };
+  const renderInput = { resume: renderResume, summary, orderedSkills, experiences };
   const markdown = renderResumeMarkdown(renderInput);
   const html = renderResumeHtml(renderInput);
   const matchScore = computeMatchScore(matched, analysis, resume, resumeSkills);
@@ -180,19 +177,8 @@ function assemble(
     missingSkills: missing,
     matchScore,
     summary,
-    notes: engineResult.notes,
+    notes: [...notes, ...extraNotes],
   };
-}
-
-function reorderBullets(exp: ResumeExperience, terms: Set<string>): string[] {
-  if (exp.bullets.length <= 1) return [...exp.bullets];
-  const indexed = exp.bullets.map((b, i) => {
-    let s = 0;
-    for (const t of tokenize(b)) if (terms.has(t)) s += 1;
-    return { b, i, s };
-  });
-  indexed.sort((a, z) => z.s - a.s || a.i - z.i);
-  return indexed.map((x) => x.b);
 }
 
 export function computeMatchScore(

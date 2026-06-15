@@ -6,10 +6,12 @@
  * local worker. No network calls carry your data — only the model download does,
  * and that download contains no personal data.
  */
-import type { ResumeEngine, TailorRequest, EngineTailorResult } from "./engine.js";
-import { summarizeExperiences } from "./engine.js";
+import type { ResumeEngine, TailorRequest, EngineTailorResult, TailoredContent } from "./engine.js";
+import { identityFrom, serializeResumeForLlm } from "./engine.js";
+import type { ResumeEducation, ResumeExperience } from "../types/index.js";
 import type { ChatMessage, LlmFromWorker, LlmToWorker } from "./llm-protocol.js";
 import { LLM_WORKER_FILE } from "./llm-protocol.js";
+import { uid } from "../lib/util.js";
 import { createLogger } from "../lib/logger.js";
 
 interface Pending {
@@ -21,11 +23,10 @@ interface Pending {
   idleMs?: number;
 }
 
-const SUMMARY_MAX_TOKENS = 240;
-const BULLETS_MAX_TOKENS = 420;
+const RESUME_MAX_TOKENS = 2048;
 // Bound generation; the model download (init) uses an idle timeout reset by
 // progress events so a slow-but-advancing download is never killed.
-const CHAT_TIMEOUT_MS = 180_000;
+const CHAT_TIMEOUT_MS = 240_000;
 const INIT_IDLE_TIMEOUT_MS = 180_000;
 
 export class WebLLMEngine implements ResumeEngine {
@@ -59,21 +60,34 @@ export class WebLLMEngine implements ResumeEngine {
   }
 
   async tailor(req: TailorRequest): Promise<EngineTailorResult> {
-    const notes: string[] = [];
     req.onProgress?.({ phase: "loading-model", progress: 0, message: "Loading on-device model…" });
     await this.init((progress, text) =>
       req.onProgress?.({ phase: "loading-model", progress, message: text }),
     );
 
-    req.onProgress?.({ phase: "generating", message: "Writing a tailored summary…" });
-    const summary = sanitize(await this.generateSummary(req));
+    req.onProgress?.({ phase: "generating", message: "Writing your tailored resume…" });
+    const source = serializeResumeForLlm(req.resume);
+    const raw = await this.chat(
+      buildResumePrompt(source, req),
+      Math.min(req.temperature, 0.35),
+      RESUME_MAX_TOKENS,
+    );
+    const parsed = parseResumeJson(raw);
+    if (!parsed) throw new Error("the model did not return a usable resume");
 
-    req.onProgress?.({ phase: "generating", message: "Rephrasing your most recent role…" });
-    const bullets = await this.rewriteTopExperience(req);
+    const content: TailoredContent = {
+      ...identityFrom(req.resume),
+      summary: parsed.summary || req.resume.summary,
+      skills: parsed.skills.length ? parsed.skills : req.resume.skills,
+      experiences: parsed.experiences.length ? parsed.experiences : req.resume.experiences,
+      education: parsed.education.length ? parsed.education : req.resume.education,
+    };
 
     req.onProgress?.({ phase: "done" });
-    notes.push(`Generated on-device with ${this.model} (WebLLM) — nothing left your machine.`);
-    return { summary, bullets, notes };
+    return {
+      content,
+      notes: [`Written on-device with ${this.model} (WebLLM) — nothing left your machine.`],
+    };
   }
 
   /** Generic single-shot generation (used by the autofill field mapper). */
@@ -178,84 +192,95 @@ export class WebLLMEngine implements ResumeEngine {
     });
   }
 
-  private async generateSummary(req: TailorRequest): Promise<string> {
-    const messages: ChatMessage[] = [
-      {
-        role: "system",
-        content:
-          "You are a professional resume writer. Write a concise 2-3 sentence professional " +
-          "summary tailored to the target role. CRITICAL: use ONLY facts present in the " +
-          "candidate's data. Never invent employers, titles, metrics, or skills. Output plain " +
-          "text only — no headings, no markdown, no preamble.",
-      },
-      {
-        role: "user",
-        content: [
-          `Target role: ${req.analysis.role ?? "Software Engineer"}`,
-          req.analysis.seniority ? `Seniority: ${req.analysis.seniority}` : "",
-          `Skills this job values: ${req.analysis.skills.slice(0, 12).join(", ") || "n/a"}`,
-          `Candidate's matching skills: ${req.matchedSkills.join(", ") || "n/a"}`,
-          "",
-          "Candidate data:",
-          req.resume.headline ? `Headline: ${req.resume.headline}` : "",
-          req.resume.summary ? `Existing summary: ${req.resume.summary}` : "",
-          `Skills: ${req.resume.skills.join(", ") || "n/a"}`,
-          "Experience:",
-          summarizeExperiences(req.resume, 4),
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      },
-    ];
-    return this.chat(messages, req.temperature, SUMMARY_MAX_TOKENS);
-  }
-
-  private async rewriteTopExperience(
-    req: TailorRequest,
-  ): Promise<Record<string, string[]> | undefined> {
-    const exp = req.resume.experiences[0];
-    if (!exp || exp.bullets.length === 0) return undefined;
-    const messages: ChatMessage[] = [
-      {
-        role: "system",
-        content:
-          "You rewrite resume bullet points to emphasize relevance to a target role while " +
-          "staying strictly truthful. Rules: keep every original achievement and any numbers " +
-          "exactly; do NOT add new metrics or claims; start each bullet with a strong past-tense " +
-          "verb; surface technologies the job values when they genuinely appear. Output ONLY the " +
-          "rewritten bullets, one per line, each starting with '- '. No commentary.",
-      },
-      {
-        role: "user",
-        content: [
-          `Target role: ${req.analysis.role ?? "Software Engineer"}`,
-          `Technologies the job values: ${req.analysis.skills.slice(0, 12).join(", ") || "n/a"}`,
-          `Role: ${exp.title} at ${exp.company}`,
-          "Original bullets:",
-          ...exp.bullets.map((b) => `- ${b}`),
-        ].join("\n"),
-      },
-    ];
-    try {
-      const raw = await this.chat(messages, req.temperature, BULLETS_MAX_TOKENS);
-      const parsed = parseBullets(raw);
-      if (parsed.length === 0) return undefined;
-      return { [exp.id]: parsed };
-    } catch (e) {
-      this.log.warn("bullet rewrite failed; keeping originals", e);
-      return undefined;
-    }
-  }
 }
 
-function parseBullets(raw: string): string[] {
-  return raw
-    .split("\n")
-    .map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim())
-    .filter((l) => l.length >= 3 && l.length <= 320)
-    .slice(0, 10);
+/* ----------------------------- prompt + parsing -------------------------- */
+
+const RESUME_SCHEMA = `{
+  "summary": "2-3 sentence professional summary tailored to the job",
+  "skills": ["most relevant skills first"],
+  "experiences": [
+    {"title": "", "company": "", "startDate": "", "endDate": "", "location": "", "bullets": ["rephrased achievement from the source"]}
+  ],
+  "education": [{"degree": "", "institution": "", "year": ""}]
+}`;
+
+function buildResumePrompt(source: string, req: TailorRequest): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content:
+        "You are an expert resume writer. Rewrite the candidate's resume tailored to the TARGET JOB. " +
+        "STRICT RULES: use ONLY facts found in the SOURCE RESUME — never invent companies, titles, dates, " +
+        "degrees, numbers/metrics, or skills. You may rephrase bullets and reorder/select content to " +
+        "emphasize what matches the job, but every fact must come from the source. Do NOT add skills the " +
+        "candidate does not have. Reply with ONLY a JSON object in exactly this shape — no markdown, no code " +
+        "fences, no commentary:\n" +
+        RESUME_SCHEMA,
+    },
+    {
+      role: "user",
+      content:
+        `TARGET JOB:\n${req.jd.slice(0, 3000)}\n\n` +
+        `Skills this job values: ${req.analysis.skills.slice(0, 15).join(", ") || "n/a"}\n` +
+        `Do NOT claim these (the candidate lacks them): ${req.missingSkills.join(", ") || "none"}\n\n` +
+        `SOURCE RESUME:\n${source}\n\nJSON:`,
+    },
+  ];
 }
 
-function sanitize(text: string): string {
-  return text.replace(/^\s*(summary|professional summary)\s*[:\-]\s*/i, "").trim();
+interface ParsedResumeJson {
+  summary: string;
+  skills: string[];
+  experiences: ResumeExperience[];
+  education: ResumeEducation[];
+}
+
+function parseResumeJson(raw: string): ParsedResumeJson | null {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  let obj: Record<string, unknown>;
+  try {
+    obj = JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (!obj || typeof obj !== "object") return null;
+
+  const summary = str(obj.summary);
+  const skills = Array.isArray(obj.skills)
+    ? obj.skills.map(str).filter(Boolean).slice(0, 30)
+    : [];
+  const experiences = Array.isArray(obj.experiences)
+    ? obj.experiences.map(toExperience).filter((e) => e.title || e.company || e.bullets.length > 0).slice(0, 12)
+    : [];
+  const education = Array.isArray(obj.education)
+    ? obj.education.map(toEducation).filter((e) => e.institution || e.degree).slice(0, 6)
+    : [];
+
+  if (!summary && experiences.length === 0 && skills.length === 0) return null;
+  return { summary, skills, experiences, education };
+}
+
+function toExperience(o: unknown): ResumeExperience {
+  const r = (o ?? {}) as Record<string, unknown>;
+  const bullets = Array.isArray(r.bullets) ? r.bullets.map(str).filter(Boolean).slice(0, 12) : [];
+  const exp: ResumeExperience = { id: uid("exp"), company: str(r.company), title: str(r.title), bullets, skills: [] };
+  if (str(r.startDate)) exp.startDate = str(r.startDate);
+  if (str(r.endDate)) exp.endDate = str(r.endDate);
+  if (str(r.location)) exp.location = str(r.location);
+  return exp;
+}
+
+function toEducation(o: unknown): ResumeEducation {
+  const r = (o ?? {}) as Record<string, unknown>;
+  const edu: ResumeEducation = { institution: str(r.institution) };
+  if (str(r.degree)) edu.degree = str(r.degree);
+  if (str(r.year)) edu.year = str(r.year);
+  return edu;
+}
+
+function str(v: unknown): string {
+  return typeof v === "string" ? v.trim() : "";
 }

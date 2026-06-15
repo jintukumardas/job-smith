@@ -1,10 +1,11 @@
 /**
- * Deterministic, offline resume tailoring. Always available — also the fallback
- * when WebLLM can't run. It does NOT invent facts: it reorders existing bullets
- * by relevance and composes a summary from the user's own data + matched skills.
+ * Deterministic, offline resume tailoring — the always-available fallback when
+ * WebLLM can't run. It does NOT invent facts: it reorders existing bullets by
+ * relevance and composes a summary from the user's own data + matched skills.
  */
-import type { ResumeEngine, TailorRequest, EngineTailorResult } from "./engine.js";
-import { tokenize } from "../lib/util.js";
+import type { ResumeEngine, TailorRequest, EngineTailorResult, TailoredContent } from "./engine.js";
+import { identityFrom } from "./engine.js";
+import { tokenize, uniqCi } from "../lib/util.js";
 
 export class DeterministicEngine implements ResumeEngine {
   readonly kind = "deterministic" as const;
@@ -15,12 +16,20 @@ export class DeterministicEngine implements ResumeEngine {
 
   async tailor(req: TailorRequest): Promise<EngineTailorResult> {
     req.onProgress?.({ phase: "generating", message: "Tailoring locally…" });
-    const summary = buildSummary(req);
-    const bullets = reorderAllBullets(req);
+    const terms = relevanceTerms(req);
+    const content: TailoredContent = {
+      ...identityFrom(req.resume),
+      summary: composeSummary(req),
+      skills: orderSkills(req),
+      experiences: req.resume.experiences.map((e) => ({
+        ...e,
+        bullets: reorderBullets(e.bullets, terms),
+      })),
+      education: req.resume.education,
+    };
     req.onProgress?.({ phase: "done" });
     return {
-      summary,
-      bullets,
+      content,
       notes: ["Generated locally (deterministic engine) — facts preserved verbatim."],
     };
   }
@@ -30,7 +39,8 @@ export class DeterministicEngine implements ResumeEngine {
   }
 }
 
-function buildSummary(req: TailorRequest): string {
+/** Truthful summary from the candidate's own data + matched skills. Reusable. */
+export function composeSummary(req: TailorRequest): string {
   const { resume, analysis, matchedSkills } = req;
   const role = analysis.role || resume.headline || "Software Engineer";
   const top = (matchedSkills.length ? matchedSkills : resume.skills).slice(0, 6);
@@ -44,39 +54,34 @@ function buildSummary(req: TailorRequest): string {
   } else {
     sentences.push("Software professional with a track record of shipping reliable software.");
   }
-
   if (skillPhrase) {
     sentences.push(
-      `Hands-on experience with ${skillPhrase}${
-        matchedSkills.length ? ", which this role calls for" : ""
-      }.`,
+      `Hands-on experience with ${skillPhrase}${matchedSkills.length ? ", which this role calls for" : ""}.`,
     );
   }
   sentences.push(`Eager to bring this experience to a ${role} position.`);
-
   return dedupeSentences(sentences).join(" ");
 }
 
-function reorderAllBullets(req: TailorRequest): Record<string, string[]> {
-  const terms = new Set<string>([
-    ...req.analysis.keywords.map((k) => k.toLowerCase()),
-    ...req.analysis.skills.map((s) => s.toLowerCase()),
-    ...req.matchedSkills.map((s) => s.toLowerCase()),
-  ]);
-  const out: Record<string, string[]> = {};
-  for (const exp of req.resume.experiences) {
-    if (!exp.bullets.length) continue;
-    const indexed = exp.bullets.map((b, i) => ({ b, i, s: bulletScore(b, terms) }));
-    indexed.sort((a, z) => z.s - a.s || a.i - z.i); // relevance desc, stable
-    out[exp.id] = indexed.map((x) => x.b);
-  }
-  return out;
+export function orderSkills(req: TailorRequest): string[] {
+  return uniqCi([...req.matchedSkills, ...req.resumeSkills, ...req.resume.skills]).slice(0, 18);
 }
 
-function bulletScore(bullet: string, terms: Set<string>): number {
-  let score = 0;
-  for (const token of tokenize(bullet)) if (terms.has(token)) score += 1;
-  return score;
+export function relevanceTerms(req: TailorRequest): Set<string> {
+  return new Set<string>(
+    [...req.analysis.keywords, ...req.analysis.skills, ...req.matchedSkills].map((t) => t.toLowerCase()),
+  );
+}
+
+export function reorderBullets(bullets: string[], terms: Set<string>): string[] {
+  if (bullets.length <= 1) return [...bullets];
+  const indexed = bullets.map((b, i) => {
+    let s = 0;
+    for (const t of tokenize(b)) if (terms.has(t)) s += 1;
+    return { b, i, s };
+  });
+  indexed.sort((a, z) => z.s - a.s || a.i - z.i);
+  return indexed.map((x) => x.b);
 }
 
 function listToPhrase(items: string[]): string {

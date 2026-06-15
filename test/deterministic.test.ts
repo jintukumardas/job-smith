@@ -50,19 +50,23 @@ describe("DeterministicEngine", () => {
     expect(await new DeterministicEngine().isAvailable()).toBe(true);
   });
 
-  it("reorders bullets so the most relevant comes first", async () => {
+  it("returns full tailored content with identity from the resume", async () => {
     const out = await new DeterministicEngine().tailor(req);
-    expect(out.bullets?.e1?.[0]).toContain("React");
-  });
-
-  it("composes a summary mentioning a matched skill", async () => {
-    const out = await new DeterministicEngine().tailor(req);
-    expect(out.summary.toLowerCase()).toContain("react");
+    expect(out.content.fullName).toBe("Sam Dev");
+    expect(out.content.email).toBe("sam@example.com");
     expect(out.notes.length).toBeGreaterThan(0);
   });
 
-  it("never drops bullets", async () => {
+  it("reorders bullets so the most relevant comes first, keeping all bullets", async () => {
     const out = await new DeterministicEngine().tailor(req);
-    expect(out.bullets?.e1).toHaveLength(resume.experiences[0].bullets.length);
+    const e1 = out.content.experiences.find((e) => e.id === "e1")!;
+    expect(e1.bullets[0]).toContain("React");
+    expect(e1.bullets).toHaveLength(resume.experiences[0].bullets.length);
+  });
+
+  it("composes a summary mentioning a matched skill and surfaces matched skills first", async () => {
+    const out = await new DeterministicEngine().tailor(req);
+    expect(out.content.summary.toLowerCase()).toContain("react");
+    expect(out.content.skills[0]).toBe("React");
   });
 });
