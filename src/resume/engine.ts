@@ -13,6 +13,7 @@ import type {
   ResumeEngineKind,
   ResumeExperience,
   ResumeLink,
+  ResumeSection,
 } from "../types/index.js";
 
 export interface EngineProgress {
@@ -49,6 +50,8 @@ export interface TailoredContent {
   skills: string[];
   experiences: ResumeExperience[];
   education: ResumeEducation[];
+  /** Extra sections (Achievements, Projects, Certifications…). */
+  extraSections: ResumeSection[];
 }
 
 export interface EngineTailorResult {
@@ -104,6 +107,10 @@ function serializeStructured(resume: ResumeData): string {
     for (const ed of resume.education) {
       p.push([ed.degree, ed.institution, ed.year].filter(Boolean).join(", "));
     }
+  }
+  for (const section of resume.extraSections ?? []) {
+    p.push(section.heading.toUpperCase());
+    for (const item of section.items) p.push(`- ${item}`);
   }
   return p.join("\n");
 }

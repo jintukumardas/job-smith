@@ -1,7 +1,7 @@
 /**
  * Render a tailored resume to Markdown or ATS-friendly HTML. Pure & testable.
  */
-import type { ResumeData, ResumeExperience } from "../types/index.js";
+import type { ResumeData, ResumeExperience, ResumeSection } from "../types/index.js";
 import { escapeHtml } from "../lib/util.js";
 
 export interface RenderedExperience {
@@ -16,6 +16,8 @@ export interface RenderInput {
   orderedSkills: string[];
   /** Experiences in display order with their (possibly rewritten) bullets. */
   experiences: RenderedExperience[];
+  /** Extra sections (Achievements, Projects…), rendered after Education. */
+  extraSections?: ResumeSection[];
 }
 
 export function renderResumeMarkdown(input: RenderInput): string {
@@ -63,6 +65,12 @@ export function renderResumeMarkdown(input: RenderInput): string {
       const year = ed.year ? ` (${ed.year})` : "";
       lines.push(`- ${parts}${year}`);
     }
+  }
+
+  for (const sec of input.extraSections ?? []) {
+    if (!sec.items.length) continue;
+    lines.push("", `## ${sec.heading}`);
+    for (const item of sec.items) lines.push(`- ${item}`);
   }
 
   return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
@@ -123,6 +131,12 @@ export function renderResumeHtml(input: RenderInput): string {
       })
       .join("");
     parts.push(htmlSection("Education", `<ul>${items}</ul>`));
+  }
+
+  for (const sec of input.extraSections ?? []) {
+    if (!sec.items.length) continue;
+    const items = sec.items.map((i) => `<li>${e(i)}</li>`).join("");
+    parts.push(htmlSection(sec.heading, `<ul>${items}</ul>`));
   }
 
   return parts.join("\n");

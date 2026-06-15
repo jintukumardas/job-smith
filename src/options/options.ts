@@ -326,6 +326,9 @@ function renderResume(): HTMLElement {
           if (!r.location && p.location) { r.location = p.location; n++; }
           if (r.links.length === 0 && p.links.length > 0) { r.links = p.links; n++; }
           if (r.skills.length === 0 && p.skills.length > 0) { r.skills = p.skills; n += p.skills.length; }
+          if (r.experiences.length === 0 && p.experiences.length > 0) { r.experiences = p.experiences; n += p.experiences.length; }
+          if (r.education.length === 0 && p.education.length > 0) { r.education = p.education; n += p.education.length; }
+          if (!(r.extraSections?.length) && p.extraSections.length > 0) { r.extraSections = p.extraSections; n += p.extraSections.length; }
           await saveSettings(settings);
           if (n === 0) {
             flash(status, "Nothing new found (fields already filled, or no contact/skills detected).", "err");

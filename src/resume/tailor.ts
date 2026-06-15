@@ -139,11 +139,28 @@ function assemble(
   const content = result.content;
   const notes = [...result.notes];
 
-  // Keep only skills the candidate actually has (drop anything invented / any JD gap).
-  const realSkills = content.skills.filter(
-    (s) => resumeSkills.some((rs) => sameSkill(rs, s)) && !missing.some((m) => sameSkill(m, s)),
-  );
-  const orderedSkills = uniqCi([...matched, ...realSkills]).slice(0, 18);
+  // Keep the candidate's FULL skillset (anything truthfully in their resume),
+  // most-relevant first, dropping only invented skills and JD gaps.
+  const sourceLower = [
+    resume.baseResumeText,
+    resume.skills.join(" "),
+    resume.summary,
+    resume.headline,
+    ...resume.experiences.flatMap((e) => [e.title, e.company ?? "", ...e.bullets]),
+    ...(resume.extraSections ?? []).flatMap((s) => s.items),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const isGap = (s: string): boolean => missing.some((m) => sameSkill(m, s));
+  const isTruthful = (s: string): boolean =>
+    resume.skills.some((rs) => sameSkill(rs, s)) ||
+    resumeSkills.some((rs) => sameSkill(rs, s)) ||
+    sourceLower.includes(s.toLowerCase());
+
+  const llmSkills = content.skills.filter((s) => isTruthful(s) && !isGap(s));
+  const ownSkills = resume.skills.filter((s) => !isGap(s));
+  const orderedSkills = uniqCi([...matched, ...llmSkills, ...ownSkills]).slice(0, 40);
 
   // Anti-fabrication: if the summary claims a skill the candidate lacks, replace
   // it with a truthful, deterministic summary.
@@ -164,7 +181,13 @@ function assemble(
     skills: orderedSkills,
     baseResumeText: "",
   };
-  const renderInput = { resume: renderResume, summary, orderedSkills, experiences };
+  const renderInput = {
+    resume: renderResume,
+    summary,
+    orderedSkills,
+    experiences,
+    extraSections: content.extraSections,
+  };
   const markdown = renderResumeMarkdown(renderInput);
   const html = renderResumeHtml(renderInput);
   const matchScore = computeMatchScore(matched, analysis, resume, resumeSkills);

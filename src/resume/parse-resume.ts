@@ -6,9 +6,15 @@
  * Resume formats vary wildly, so this is heuristic by nature; the user can edit
  * anything after importing. Pure & unit-testable.
  */
-import type { ResumeData, ResumeEducation, ResumeExperience, ResumeLink } from "../types/index.js";
+import type {
+  ResumeData,
+  ResumeEducation,
+  ResumeExperience,
+  ResumeLink,
+  ResumeSection,
+} from "../types/index.js";
 import { detectSkills } from "./skills.js";
-import { uid } from "../lib/util.js";
+import { uid, uniqCi } from "../lib/util.js";
 
 export interface ParsedResume {
   fullName: string;
@@ -21,9 +27,26 @@ export interface ParsedResume {
   skills: string[];
   experiences: ResumeExperience[];
   education: ResumeEducation[];
+  extraSections: ResumeSection[];
 }
 
-type Section = "summary" | "experience" | "education" | "skills" | "other";
+type Section = "summary" | "experience" | "education" | "skills";
+
+interface ExtraBlock {
+  heading: string;
+  lines: string[];
+}
+interface Sectionized {
+  summary: string[];
+  experience: string[];
+  education: string[];
+  skills: string[];
+  extras: ExtraBlock[];
+}
+
+type HeaderHit =
+  | { kind: "standard"; section: Section }
+  | { kind: "extra"; heading: string };
 
 const HEADERS: { re: RegExp; section: Section }[] = [
   { re: /^(professional\s+summary|summary|profile|objective|about\s+me)\b/i, section: "summary" },
@@ -36,10 +59,21 @@ const HEADERS: { re: RegExp; section: Section }[] = [
     re: /^(skills|technical\s+skills|technologies|tech\s+stack|core\s+competencies|competencies)\b/i,
     section: "skills",
   },
-  {
-    re: /^(projects?|certifications?|awards?|publications?|languages?|interests?|volunteer|references?)\b/i,
-    section: "other",
-  },
+];
+
+/** Recognized non-standard sections, captured with their heading. */
+const EXTRA_HEADERS: { re: RegExp; label: string }[] = [
+  { re: /^(key\s+)?achievements?\b/i, label: "Achievements" },
+  { re: /^(highlights|accomplishments)\b/i, label: "Highlights" },
+  { re: /^(notable\s+|key\s+)?projects?\b/i, label: "Projects" },
+  { re: /^certifications?\b/i, label: "Certifications" },
+  { re: /^(awards?|honou?rs?)\b/i, label: "Awards" },
+  { re: /^publications?\b/i, label: "Publications" },
+  { re: /^(open[\s-]?source)\b/i, label: "Open Source" },
+  { re: /^patents?\b/i, label: "Patents" },
+  { re: /^(leadership|volunteer(ing)?|activities|community)\b/i, label: "Leadership & Activities" },
+  { re: /^languages?\b/i, label: "Languages" },
+  { re: /^interests?\b/i, label: "Interests" },
 ];
 
 const ROLE_NOUN =
@@ -71,9 +105,13 @@ export function parseResumeText(text: string): ParsedResume {
     location: extractLocation(header),
     summary: cleanSummary(sections.summary),
     links: extractLinks(raw),
-    skills: detectSkills(raw),
+    skills: uniqCi([...detectSkills(raw), ...extractRawSkills(sections.skills)]).slice(0, 60),
     experiences: parseExperience(sections.experience),
     education: parseEducation(sections.education),
+    extraSections: sections.extras
+      .map((e) => ({ heading: e.heading, items: linesToItems(e.lines) }))
+      .filter((s) => s.items.length > 0)
+      .slice(0, 8),
   };
 
   result.headline = extractHeadline(lines, result.fullName);
@@ -96,36 +134,66 @@ export function enrichResume(resume: ResumeData): ResumeData {
     skills: resume.skills.length ? resume.skills : p.skills,
     experiences: resume.experiences.length ? resume.experiences : p.experiences,
     education: resume.education.length ? resume.education : p.education,
+    extraSections: resume.extraSections?.length ? resume.extraSections : p.extraSections,
   };
 }
 
 /* ------------------------------ sectionizing ----------------------------- */
 
-function classifyHeader(line: string): Section | null {
+function classifyHeader(line: string): HeaderHit | null {
   const l = line.replace(/[:\s]+$/, "");
   if (!l || l.length > 40) return null;
-  for (const { re, section } of HEADERS) if (re.test(l)) return section;
+  for (const { re, section } of HEADERS) if (re.test(l)) return { kind: "standard", section };
+  for (const { re } of EXTRA_HEADERS) if (re.test(l)) return { kind: "extra", heading: prettyHeading(l) };
   return null;
 }
 
-function sectionize(lines: string[]): Record<Section, string[]> {
-  const out: Record<Section, string[]> = {
-    summary: [],
-    experience: [],
-    education: [],
-    skills: [],
-    other: [],
-  };
-  let current: Section | null = null;
+function prettyHeading(line: string): string {
+  return /[a-z]/.test(line) ? line.trim() : line.trim().toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function sectionize(lines: string[]): Sectionized {
+  const out: Sectionized = { summary: [], experience: [], education: [], skills: [], extras: [] };
+  let current: HeaderHit | null = null;
+  let curExtra: ExtraBlock | null = null;
   for (const line of lines) {
     const header = classifyHeader(line);
     if (header) {
       current = header;
+      if (header.kind === "extra") {
+        curExtra = { heading: header.heading, lines: [] };
+        out.extras.push(curExtra);
+      } else {
+        curExtra = null;
+      }
       continue;
     }
-    if (current) out[current].push(line);
+    if (!current) continue;
+    if (current.kind === "standard") out[current.section].push(line);
+    else if (curExtra) curExtra.lines.push(line);
   }
   return out;
+}
+
+function linesToItems(lines: string[]): string[] {
+  return lines.map((l) => l.replace(BULLET, "").trim()).filter((l) => l.length >= 2).slice(0, 20);
+}
+
+function extractRawSkills(lines: string[]): string[] {
+  const items: string[] = [];
+  for (const raw of lines) {
+    if (!raw) continue;
+    let line = raw.replace(BULLET, "").trim();
+    const colon = line.indexOf(":"); // drop a "Languages:" / "Tools:" category prefix
+    if (colon > 0 && colon <= 24 && /^[A-Za-z /&]+$/.test(line.slice(0, colon))) {
+      line = line.slice(colon + 1);
+    }
+    for (const part of line.split(/[,|•·;]|\s{2,}/)) {
+      const s = part.trim().replace(/\.$/, "");
+      if (s.length >= 2 && s.length <= 40 && !/^[-–]/.test(s)) items.push(s);
+    }
+  }
+  return uniqCi(items).slice(0, 50);
 }
 
 /* ------------------------------- experience ------------------------------ */
@@ -176,8 +244,8 @@ function toExperience(headerLines: string[], bullets: string[]): ResumeExperienc
   }
 
   const segs = header
-    .split(/\s*[|·]\s*/)
-    .map((s) => s.replace(/^[,\s–-]+|[,\s–-]+$/g, "").trim())
+    .split(/\s*[|·—–]\s*|\s+-\s+/)
+    .map((s) => s.replace(/^[,\s]+|[,\s]+$/g, "").trim())
     .filter(Boolean);
 
   const atMatch = /^(.*?)\s+\bat\b\s+(.*)$/i.exec(segs[0] ?? "");
@@ -208,7 +276,11 @@ function toExperience(headerLines: string[], bullets: string[]): ResumeExperienc
 }
 
 function looksLikeLocation(s: string): boolean {
-  return /remote|hybrid|on-?site/i.test(s) || /,\s*[A-Z]{2,}\b/.test(s) || /\b(india|usa|uk|germany|canada|bengaluru|bangalore)\b/i.test(s);
+  return (
+    /remote|hybrid|on-?site|distributed/i.test(s) ||
+    /,\s*[A-Z]{2,}\b/.test(s) ||
+    /\b(india|usa|us|uk|eu|emea|apac|canada|germany|europe|bengaluru|bangalore|global|globally)\b/i.test(s)
+  );
 }
 
 function normalizeDate(value: string): string {
@@ -221,9 +293,14 @@ function parseEducation(lines: string[], max = 6): ResumeEducation[] {
   const out: ResumeEducation[] = [];
   for (const line of lines) {
     if (!line || BULLET.test(line)) continue;
-    const yearMatch = /(19|20)\d{2}/.exec(line);
-    const year = yearMatch ? yearMatch[0] : undefined;
-    const withoutYear = line.replace(/\(?\b(19|20)\d{2}\b\)?/g, "").replace(/[–\-—]\s*present/i, "").trim();
+    const range = /((19|20)\d{2})\s*[-–—]\s*((19|20)\d{2}|present)/i.exec(line);
+    const single = /(19|20)\d{2}/.exec(line);
+    const year = range ? `${range[1]}-${range[3]}` : single ? single[0] : undefined;
+    const withoutYear = line
+      .replace(/\(?\s*(19|20)\d{2}\s*(?:[-–—]\s*((19|20)\d{2}|present))?\s*\)?/gi, " ")
+      .replace(/\(\s*\)/g, " ")
+      .replace(/\s{2,}/g, " ")
+      .trim();
     const parts = withoutYear.split(/\s*[,|·]\s*/).map((s) => s.trim()).filter(Boolean);
     const degreePart = parts.find((p) => DEGREE.test(p));
     const institution = parts.find((p) => p !== degreePart) ?? parts[0] ?? withoutYear;

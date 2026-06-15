@@ -61,6 +61,12 @@ export interface ResumeLink {
   url: string;
 }
 
+/** An arbitrary extra resume section (Achievements, Projects, Certifications…). */
+export interface ResumeSection {
+  heading: string;
+  items: string[];
+}
+
 export interface ResumeData {
   fullName: string;
   headline: string;
@@ -73,6 +79,8 @@ export interface ResumeData {
   skills: string[];
   experiences: ResumeExperience[];
   education: ResumeEducation[];
+  /** Extra sections (Achievements, Projects, Certifications…), often from base text. */
+  extraSections?: ResumeSection[];
   /** Optional pasted full-resume text; a fallback corpus for tailoring. */
   baseResumeText: string;
 }

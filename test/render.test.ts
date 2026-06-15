@@ -29,6 +29,7 @@ const input: RenderInput = {
   summary: "Tailored summary.",
   orderedSkills: ["React", "Node.js"],
   experiences: [{ exp: resume.experiences[0], bullets: ["Shipped a React app"] }],
+  extraSections: [{ heading: "Achievements", items: ["Spoke at a conference"] }],
 };
 
 describe("renderResumeHtml", () => {
@@ -39,6 +40,11 @@ describe("renderResumeHtml", () => {
     expect(html).toContain("Key Skills");
     expect(html).toContain("Experience");
     expect(html).toContain("<li>Shipped a React app</li>");
+  });
+
+  it("renders extra sections like Achievements", () => {
+    expect(html).toContain("Achievements");
+    expect(html).toContain("<li>Spoke at a conference</li>");
   });
 
   it("escapes HTML to prevent markup injection", () => {

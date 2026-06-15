@@ -26,6 +26,7 @@ export class DeterministicEngine implements ResumeEngine {
         bullets: reorderBullets(e.bullets, terms),
       })),
       education: req.resume.education,
+      extraSections: req.resume.extraSections ?? [],
     };
     req.onProgress?.({ phase: "done" });
     return {

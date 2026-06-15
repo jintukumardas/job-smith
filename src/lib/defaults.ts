@@ -82,6 +82,7 @@ export function defaultSettings(): Settings {
       skills: [],
       experiences: [],
       education: [],
+      extraSections: [],
       baseResumeText: "",
     },
     autofill: {

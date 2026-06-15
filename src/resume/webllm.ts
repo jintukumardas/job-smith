@@ -8,7 +8,7 @@
  */
 import type { ResumeEngine, TailorRequest, EngineTailorResult, TailoredContent } from "./engine.js";
 import { identityFrom, serializeResumeForLlm } from "./engine.js";
-import type { ResumeEducation, ResumeExperience } from "../types/index.js";
+import type { ResumeEducation, ResumeExperience, ResumeSection } from "../types/index.js";
 import type { ChatMessage, LlmFromWorker, LlmToWorker } from "./llm-protocol.js";
 import { LLM_WORKER_FILE } from "./llm-protocol.js";
 import { uid } from "../lib/util.js";
@@ -81,6 +81,7 @@ export class WebLLMEngine implements ResumeEngine {
       skills: parsed.skills.length ? parsed.skills : req.resume.skills,
       experiences: parsed.experiences.length ? parsed.experiences : req.resume.experiences,
       education: parsed.education.length ? parsed.education : req.resume.education,
+      extraSections: parsed.sections.length ? parsed.sections : req.resume.extraSections ?? [],
     };
 
     req.onProgress?.({ phase: "done" });
@@ -198,11 +199,12 @@ export class WebLLMEngine implements ResumeEngine {
 
 const RESUME_SCHEMA = `{
   "summary": "2-3 sentence professional summary tailored to the job",
-  "skills": ["most relevant skills first"],
+  "skills": ["ALL of the candidate's skills from the source, most relevant first"],
   "experiences": [
     {"title": "", "company": "", "startDate": "", "endDate": "", "location": "", "bullets": ["rephrased achievement from the source"]}
   ],
-  "education": [{"degree": "", "institution": "", "year": ""}]
+  "education": [{"degree": "", "institution": "", "year": ""}],
+  "sections": [{"heading": "Achievements", "items": ["from the source"]}]
 }`;
 
 function buildResumePrompt(source: string, req: TailorRequest): ChatMessage[] {
@@ -214,8 +216,9 @@ function buildResumePrompt(source: string, req: TailorRequest): ChatMessage[] {
         "STRICT RULES: use ONLY facts found in the SOURCE RESUME — never invent companies, titles, dates, " +
         "degrees, numbers/metrics, or skills. You may rephrase bullets and reorder/select content to " +
         "emphasize what matches the job, but every fact must come from the source. Do NOT add skills the " +
-        "candidate does not have. Reply with ONLY a JSON object in exactly this shape — no markdown, no code " +
-        "fences, no commentary:\n" +
+        "candidate does not have. Include the candidate's FULL skill list and ALL relevant sections from the " +
+        "source (achievements, projects, certifications, etc.) under \"sections\". Reply with ONLY a JSON object " +
+        "in exactly this shape — no markdown, no code fences, no commentary:\n" +
         RESUME_SCHEMA,
     },
     {
@@ -234,6 +237,7 @@ interface ParsedResumeJson {
   skills: string[];
   experiences: ResumeExperience[];
   education: ResumeEducation[];
+  sections: ResumeSection[];
 }
 
 function parseResumeJson(raw: string): ParsedResumeJson | null {
@@ -258,9 +262,18 @@ function parseResumeJson(raw: string): ParsedResumeJson | null {
   const education = Array.isArray(obj.education)
     ? obj.education.map(toEducation).filter((e) => e.institution || e.degree).slice(0, 6)
     : [];
+  const sections = Array.isArray(obj.sections)
+    ? obj.sections.map(toSection).filter((s) => s.heading && s.items.length > 0).slice(0, 8)
+    : [];
 
   if (!summary && experiences.length === 0 && skills.length === 0) return null;
-  return { summary, skills, experiences, education };
+  return { summary, skills, experiences, education, sections };
+}
+
+function toSection(o: unknown): ResumeSection {
+  const r = (o ?? {}) as Record<string, unknown>;
+  const items = Array.isArray(r.items) ? r.items.map(str).filter(Boolean).slice(0, 20) : [];
+  return { heading: str(r.heading), items };
 }
 
 function toExperience(o: unknown): ResumeExperience {
