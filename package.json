@@ -1,0 +1,35 @@
+{
+  "name": "job-smith",
+  "version": "1.0.0",
+  "description": "JobSmith — a privacy-first, local-only Chrome extension that tracks remote job listings, tailors your resume on-device (WebLLM), and politely auto-fills application forms. No servers, no third-party data processing.",
+  "type": "module",
+  "author": "Jintu Kumar Das <jintukumardas@gmail.com>",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint \"src/**/*.ts\"",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "package": "npm run build && node -e \"const{execSync}=require('child_process');execSync('cd dist && zip -r -X ../job-smith.zip .',{stdio:'inherit'})\""
+  },
+  "dependencies": {
+    "@mlc-ai/web-llm": "^0.2.79"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "@types/node": "^22.10.0",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "esbuild": "^0.24.2",
+    "eslint": "^9.17.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
