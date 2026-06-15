@@ -12,12 +12,13 @@ import type {
 export const SCHEMA_VERSION = 1;
 
 /**
- * Best model for resume authoring (strong instruction-following + reliable JSON).
- * ~5GB one-time download, needs ~6GB GPU/unified memory. Falls back to the offline
- * engine on machines that can't run it. Lighter option: Qwen2.5-3B-Instruct-q4f16_1-MLC.
- * See https://mlc.ai/models for the full list of valid ids.
+ * Default on-device model: best quality that reliably runs in-browser on typical
+ * hardware (~2GB download, ~3GB GPU/unified memory). Qwen2.5-3B is excellent at
+ * instruction-following + structured JSON for resume authoring. If you have a
+ * strong GPU (~6GB+), `Qwen2.5-7B-Instruct-q4f16_1-MLC` is higher quality. On
+ * GPUs without shader-f16, use a `q4f32_1` variant. See https://mlc.ai/models.
  */
-export const DEFAULT_MODEL = "Qwen2.5-7B-Instruct-q4f16_1-MLC";
+export const DEFAULT_MODEL = "Qwen2.5-3B-Instruct-q4f16_1-MLC";
 
 // Per-provider minimum poll intervals live on each JobProvider.minIntervalMinutes
 // (the single source of truth, enforced in jobs/aggregator.ts).

@@ -199,6 +199,89 @@ function extractRawSkills(lines: string[]): string[] {
 /* ------------------------------- experience ------------------------------ */
 
 function parseExperience(lines: string[], max = 12): ResumeExperience[] {
+  const ls = lines.map((l) => l.trim());
+  // Each job carries a date range; anchor on those so plain-paragraph resumes
+  // (no "•" bullet markers) still split into entries with their descriptions.
+  const anchors: number[] = [];
+  ls.forEach((l, i) => {
+    if (l && DATE_RANGE.test(l)) anchors.push(i);
+  });
+  if (anchors.length === 0) return parseExperienceByBullets(ls, max);
+
+  const entries: ResumeExperience[] = [];
+  for (let k = 0; k < anchors.length; k++) {
+    const a = anchors[k];
+    let headerIdx = a - 1;
+    while (headerIdx >= 0 && !ls[headerIdx]) headerIdx--;
+    const header = headerIdx >= 0 ? ls[headerIdx] : "";
+
+    let end = ls.length;
+    if (k + 1 < anchors.length) {
+      let nextHeader = anchors[k + 1] - 1; // the next entry's header line
+      while (nextHeader > a && !ls[nextHeader]) nextHeader--;
+      end = nextHeader;
+    }
+    const bullets: string[] = [];
+    for (let i = a + 1; i < end; i++) {
+      const b = ls[i];
+      if (b) bullets.push(b.replace(BULLET, "").trim());
+    }
+    entries.push(toExperienceFromParts(header, ls[a], bullets));
+  }
+  return entries.filter((e) => e.title || e.company || e.bullets.length > 0).slice(0, max);
+}
+
+function toExperienceFromParts(header: string, dateLine: string, bullets: string[]): ResumeExperience {
+  const exp: ResumeExperience = { id: uid("exp"), company: "", title: "", bullets, skills: [] };
+  const dm = DATE_RANGE.exec(dateLine);
+  if (dm) {
+    exp.startDate = normalizeDate(dm[1]);
+    exp.endDate = normalizeDate(dm[2]);
+    const loc = dateLine.replace(dm[0], " ").replace(/^[\s·|,–—-]+|[\s·|,–—-]+$/g, "").trim();
+    if (loc) exp.location = loc;
+  }
+  assignTitleCompany(exp, header);
+  exp.skills = detectSkills([exp.title, exp.company, ...bullets].join(" "));
+  return exp;
+}
+
+/** Split a "Company — Title" / "Title — Company" header into the two fields. */
+function assignTitleCompany(exp: ResumeExperience, header: string): void {
+  const segs = header
+    .split(/\s*[|·—–]\s*|\s+-\s+/)
+    .map((s) => s.replace(/^[,\s]+|[,\s]+$/g, "").trim())
+    .filter(Boolean);
+
+  const atMatch = /^(.*?)\s+\bat\b\s+(.*)$/i.exec(segs[0] ?? "");
+  if (atMatch) {
+    exp.title = atMatch[1].trim();
+    exp.company = atMatch[2].trim();
+    return;
+  }
+  if (segs.length >= 2) {
+    const titleSeg = segs.find((s) => ROLE_NOUN.test(s));
+    if (titleSeg) {
+      exp.title = titleSeg;
+      exp.company = segs.find((s) => s !== titleSeg) ?? "";
+    } else {
+      exp.company = segs[0];
+      exp.title = segs[1];
+    }
+    return;
+  }
+  const comma = /^(.*?),\s*(.*)$/.exec(segs[0] ?? "");
+  if (comma) {
+    exp.title = comma[1].trim();
+    exp.company = comma[2].trim();
+  } else if (ROLE_NOUN.test(segs[0] ?? "")) {
+    exp.title = segs[0] ?? "";
+  } else {
+    exp.company = segs[0] ?? "";
+  }
+}
+
+/** Fallback for resumes that use "•" markers but have no parseable dates. */
+function parseExperienceByBullets(lines: string[], max: number): ResumeExperience[] {
   interface Raw {
     headerLines: string[];
     bullets: string[];
@@ -206,7 +289,6 @@ function parseExperience(lines: string[], max = 12): ResumeExperience[] {
   const entries: Raw[] = [];
   let cur: Raw | null = null;
   let lastWasBullet = false;
-
   for (const line of lines) {
     if (!line) continue;
     if (BULLET.test(line)) {
@@ -225,62 +307,22 @@ function parseExperience(lines: string[], max = 12): ResumeExperience[] {
       lastWasBullet = false;
     }
   }
-
   return entries
-    .map((e) => toExperience(e.headerLines, e.bullets))
+    .map((e) => {
+      const exp: ResumeExperience = { id: uid("exp"), company: "", title: "", bullets: e.bullets, skills: [] };
+      let header = e.headerLines.join(" | ");
+      const dm = DATE_RANGE.exec(header);
+      if (dm) {
+        exp.startDate = normalizeDate(dm[1]);
+        exp.endDate = normalizeDate(dm[2]);
+        header = header.replace(dm[0], " ").trim();
+      }
+      assignTitleCompany(exp, header);
+      exp.skills = detectSkills([exp.title, exp.company, ...e.bullets].join(" "));
+      return exp;
+    })
     .filter((e) => e.title || e.company || e.bullets.length > 0)
     .slice(0, max);
-}
-
-function toExperience(headerLines: string[], bullets: string[]): ResumeExperience {
-  let header = headerLines.join(" | ");
-  const exp: ResumeExperience = { id: uid("exp"), company: "", title: "", bullets, skills: [] };
-
-  const dm = DATE_RANGE.exec(header);
-  if (dm) {
-    exp.startDate = normalizeDate(dm[1]);
-    exp.endDate = normalizeDate(dm[2]);
-    header = header.replace(dm[0], " ").trim();
-  }
-
-  const segs = header
-    .split(/\s*[|·—–]\s*|\s+-\s+/)
-    .map((s) => s.replace(/^[,\s]+|[,\s]+$/g, "").trim())
-    .filter(Boolean);
-
-  const atMatch = /^(.*?)\s+\bat\b\s+(.*)$/i.exec(segs[0] ?? "");
-  if (atMatch) {
-    exp.title = atMatch[1].trim();
-    exp.company = atMatch[2].trim();
-  } else if (segs.length >= 2) {
-    // Pick the location-looking segment out, then assume title | company order.
-    const locIdx = segs.findIndex((s, i) => i > 0 && looksLikeLocation(s));
-    if (locIdx >= 0) {
-      exp.location = segs[locIdx];
-      segs.splice(locIdx, 1);
-    }
-    exp.title = segs[0] ?? "";
-    exp.company = segs[1] ?? "";
-  } else {
-    const comma = /^(.*?),\s*(.*)$/.exec(segs[0] ?? "");
-    if (comma) {
-      exp.title = comma[1].trim();
-      exp.company = comma[2].trim();
-    } else {
-      exp.title = segs[0] ?? "";
-    }
-  }
-
-  exp.skills = detectSkills([exp.title, exp.company, ...bullets].join(" "));
-  return exp;
-}
-
-function looksLikeLocation(s: string): boolean {
-  return (
-    /remote|hybrid|on-?site|distributed/i.test(s) ||
-    /,\s*[A-Z]{2,}\b/.test(s) ||
-    /\b(india|usa|us|uk|eu|emea|apac|canada|germany|europe|bengaluru|bangalore|global|globally)\b/i.test(s)
-  );
 }
 
 function normalizeDate(value: string): string {
@@ -291,22 +333,43 @@ function normalizeDate(value: string): string {
 
 function parseEducation(lines: string[], max = 6): ResumeEducation[] {
   const out: ResumeEducation[] = [];
+  const seen = new Set<string>();
+  const monthRe = new RegExp(`\\b${MONTH}\\b`, "gi");
   for (const line of lines) {
     if (!line || BULLET.test(line)) continue;
-    const range = /((19|20)\d{2})\s*[-–—]\s*((19|20)\d{2}|present)/i.exec(line);
+    // Skip grade/score detail lines (they belong to the entry above, not new ones).
+    if (/^\s*(grade|cgpa|gpa|percentage|score|marks)\b/i.test(line)) continue;
+
+    const range = new RegExp(
+      `((19|20)\\d{2})\\s*[-–—]+\\s*(?:${MONTH}\\s*)?((19|20)\\d{2}|present|current|now)`,
+      "i",
+    ).exec(line);
     const single = /(19|20)\d{2}/.exec(line);
     const year = range ? `${range[1]}-${range[3]}` : single ? single[0] : undefined;
-    const withoutYear = line
+
+    const cleaned = line
       .replace(/\(?\s*(19|20)\d{2}\s*(?:[-–—]\s*((19|20)\d{2}|present))?\s*\)?/gi, " ")
-      .replace(/\(\s*\)/g, " ")
+      .replace(monthRe, " ")
+      .replace(/\b(grade|cgpa|gpa)\b.*$/i, " ")
+      .replace(/[•·]/g, " ")
+      .replace(/\s*[-–—]\s*[-–—]\s*/g, " - ")
       .replace(/\s{2,}/g, " ")
+      .replace(/^[\s,–—-]+|[\s,–—-]+$/g, "")
       .trim();
-    const parts = withoutYear.split(/\s*[,|·]\s*/).map((s) => s.trim()).filter(Boolean);
+    if (!cleaned) continue;
+
+    const parts = cleaned.split(/\s+[-–—]\s+|,\s*|\s+\bat\b\s+/i).map((s) => s.trim()).filter(Boolean);
     const degreePart = parts.find((p) => DEGREE.test(p));
-    const institution = parts.find((p) => p !== degreePart) ?? parts[0] ?? withoutYear;
-    const edu: ResumeEducation = { institution: (institution ?? "").trim() };
+    const institution = (parts.find((p) => p !== degreePart) ?? parts[0] ?? cleaned)
+      .replace(/[-–—\s]+$/, "")
+      .trim();
+
+    const edu: ResumeEducation = { institution };
     if (degreePart) edu.degree = degreePart;
     if (year) edu.year = year;
+    const key = `${edu.degree ?? ""}|${edu.institution}`.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
     if (edu.institution || edu.degree) out.push(edu);
     if (out.length >= max) break;
   }
@@ -317,7 +380,13 @@ function parseEducation(lines: string[], max = 6): ResumeEducation[] {
 
 function cleanSummary(lines: string[]): string {
   const text = lines.filter((l) => !BULLET.test(l)).join(" ").replace(/\s+/g, " ").trim();
-  return text.slice(0, 800);
+  if (text.length <= 1000) return text;
+  // Truncate at a sentence boundary (never mid-word).
+  const slice = text.slice(0, 1000);
+  const lastDot = slice.lastIndexOf(". ");
+  if (lastDot > 400) return slice.slice(0, lastDot + 1);
+  const lastSpace = slice.lastIndexOf(" ");
+  return `${slice.slice(0, lastSpace > 0 ? lastSpace : 1000).trim()}…`;
 }
 
 function extractEmail(text: string): string {

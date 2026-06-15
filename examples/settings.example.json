@@ -345,7 +345,7 @@
   },
   "llm": {
     "engine": "webllm",
-    "model": "Qwen2.5-7B-Instruct-q4f16_1-MLC",
+    "model": "Qwen2.5-3B-Instruct-q4f16_1-MLC",
     "temperature": 0.4,
     "enabled": true
   },

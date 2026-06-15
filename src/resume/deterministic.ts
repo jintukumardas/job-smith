@@ -43,25 +43,33 @@ export class DeterministicEngine implements ResumeEngine {
 /** Truthful summary from the candidate's own data + matched skills. Reusable. */
 export function composeSummary(req: TailorRequest): string {
   const { resume, analysis, matchedSkills } = req;
-  const role = analysis.role || resume.headline || "Software Engineer";
+  const base = resume.summary.trim().replace(/\s+/g, " ");
+  // If the candidate wrote a real summary, use it verbatim (trimmed to a sentence
+  // boundary). It reads far better than a templated one and never gets cut mid-word.
+  if (base.length >= 120) return trimToSentence(base, 650);
+
+  const role = resume.headline || analysis.role || "Software Engineer";
   const top = (matchedSkills.length ? matchedSkills : resume.skills).slice(0, 6);
   const skillPhrase = listToPhrase(top);
 
-  const sentences: string[] = [];
-  if (resume.summary.trim()) {
-    sentences.push(resume.summary.trim().replace(/\s+/g, " "));
-  } else if (resume.headline) {
-    sentences.push(`${resume.headline} with a track record of shipping reliable software.`);
-  } else {
-    sentences.push("Software professional with a track record of shipping reliable software.");
-  }
-  if (skillPhrase) {
-    sentences.push(
-      `Hands-on experience with ${skillPhrase}${matchedSkills.length ? ", which this role calls for" : ""}.`,
-    );
-  }
-  sentences.push(`Eager to bring this experience to a ${role} position.`);
+  const sentences: string[] = [
+    base ||
+      (resume.headline
+        ? `${resume.headline} with a track record of shipping reliable software.`
+        : "Software professional with a track record of shipping reliable software."),
+  ];
+  if (skillPhrase) sentences.push(`Hands-on experience with ${skillPhrase}.`);
+  sentences.push(`Targeting ${role} roles.`);
   return dedupeSentences(sentences).join(" ");
+}
+
+function trimToSentence(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const slice = text.slice(0, max);
+  const lastDot = slice.lastIndexOf(". ");
+  if (lastDot > max * 0.5) return slice.slice(0, lastDot + 1);
+  const lastSpace = slice.lastIndexOf(" ");
+  return `${slice.slice(0, lastSpace > 0 ? lastSpace : max).trim()}…`;
 }
 
 export function orderSkills(req: TailorRequest): string[] {

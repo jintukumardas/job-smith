@@ -173,14 +173,15 @@ JobSmith ships two interchangeable engines behind one interface:
   data. Used automatically whenever WebGPU or the model is unavailable.
 
 **Choosing the model:** Résumé Studio → *WebLLM model*. The default is
-`Qwen2.5-7B-Instruct-q4f16_1-MLC` — the best in-browser model for this task (strong
-instruction-following + reliable structured JSON), ~5 GB one-time download, needs ~6 GB
-GPU/unified memory. On lighter machines use `Qwen2.5-3B-Instruct-q4f16_1-MLC` (~2 GB) or
-`Llama-3.2-3B-Instruct-q4f16_1-MLC`; if your GPU lacks shader-f16, use a `q4f32_1` variant.
-JobSmith also requests **JSON-constrained decoding**, which keeps output well-formed across
-models. See <https://mlc.ai/models> for valid ids. Saving the engine settings resets the warm
-model. (Tip: the model is shared/cached across Résumé Studio and Smart Fill — tailor once to
-warm it, then Smart Fill is fast.)
+`Qwen2.5-3B-Instruct-q4f16_1-MLC` — the best model that runs in-browser on typical hardware
+(~2 GB download, ~3 GB GPU/unified memory) and is strong at instruction-following + structured
+JSON. If you have a capable GPU (~6 GB+), `Qwen2.5-7B-Instruct-q4f16_1-MLC` is higher quality;
+if your GPU lacks shader-f16, use a `q4f32_1` variant. JobSmith requests **JSON-constrained
+decoding**, which keeps output well-formed across models. If a model is too big for your machine
+it falls back to the offline engine (which now parses your pasted résumé into complete
+experience/education/sections). See <https://mlc.ai/models> for valid ids. Saving the engine
+settings resets the warm model. (Tip: the model is shared/cached across Résumé Studio and Smart
+Fill — tailor once to warm it, then Smart Fill is fast.)
 
 ---
 
