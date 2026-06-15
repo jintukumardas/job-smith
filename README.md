@@ -35,7 +35,8 @@ auto-fills application forms — *without* the bot-like behavior that gets peopl
 | --- | --- |
 | **Job notifications** | Polls public remote-job sources on a schedule and sends a desktop notification when new listings match your role/location/keyword criteria. Fully configurable; per-source rate limits enforced. |
 | **Résumé tailoring** | Parses a job description, finds your matching/missing skills, and rewrites a tailored résumé **locally** — either with an in-browser LLM (WebLLM/WebGPU) or a deterministic offline engine. Outputs Markdown you can copy or download. |
-| **Auto-fill** | On click, fills empty application fields (name, email, phone, links, etc.) using your locally-stored profile. Maps fields by `autocomplete`, name/id and label. **Never overwrites your input. Never submits. Never clicks buttons.** |
+| **Auto-fill** | On click, fills empty application fields using values **derived automatically from your résumé** (name, email, phone, location, links, current role) — explicit overrides still win. Matches by `autocomplete`, name/id, label, and ATS `data-*` hooks, and injects into **all frames** so iframe-embedded forms (Greenhouse) work. **Never overwrites your input. Never submits. Never clicks buttons.** |
+| **Smart Fill (AI)** | For fields the matcher can't recognize, the on-device LLM reads their labels and maps them to your résumé (strictly from your data — no fabrication). Runs in an offscreen WebGPU worker; falls back gracefully when unavailable. |
 | **Application tracker** | Log saved/applied roles, statuses, dates, notes and follow-up reminders. Export to JSON/CSV. |
 | **Follow-up reminders** | Desktop reminders when a follow-up date is due. |
 | **Config page** | Everything is configurable: criteria, sources, résumé, autofill fields, notifications, engine, privacy. |
@@ -132,8 +133,14 @@ the Résumé Studio with it pre-filled. Or click **Tailor** on any listing in th
 
 **Auto-fill an application**
 On a careers/application page, open the popup and click **Autofill form**. JobSmith fills the
-empty fields it confidently recognizes, highlights them, and shows a disclosure banner.
-**Review everything and submit yourself.** Use **Clear highlights** to remove the outlines.
+empty fields it confidently recognizes — using values pulled straight from your résumé — across
+all frames (so iframe-embedded ATS forms like Greenhouse work), highlights them, and shows a
+disclosure banner. For fields it doesn't recognize (custom ATS questions), click **Smart Fill
+(AI)**: the on-device model reads those labels and maps them to your résumé. **Review everything
+and submit yourself.** Use **Clear highlights** to remove the outlines.
+
+You only fill your details once — on the **Résumé** tab. The autofill catalogue (Settings →
+Autofill) auto-populates from it; set a field's value there only to override the résumé.
 
 **Track applications & follow-ups**
 Use **Track this page** / **Track**, or add entries manually in the Applications tab. Set a
@@ -198,9 +205,12 @@ src/
     render.ts              # tailored résumé → Markdown (pure)
     tailor.ts              # orchestration + skill match + scoring
   autofill/
-    matcher.ts             # DOM field → profile key matching (pure)
-    filler.ts              # safe in-page filling (empty-only, no submit)
-  content/                 # on-demand content script + overlay styles
+    matcher.ts             # DOM field → profile key matching, incl. ATS data-* hooks (pure)
+    profile.ts             # derive autofill values from the résumé (pure)
+    filler.ts              # safe in-page filling (empty-only, no submit) + field collection
+    llm-map.ts             # map unmatched fields to résumé via the on-device LLM
+  content/                 # on-demand, all-frames content API + overlay styles
+  offscreen/               # headless WebGPU/WebLLM host for Smart Fill
   background/              # service worker, alarms, notifications
   popup/  options/  ui/    # UI
 test/                      # vitest unit tests for all the pure logic
@@ -225,7 +235,7 @@ Design choices worth knowing:
 npm run dev         # rebuild on change (sourcemaps, no minify)
 npm run build       # production build → dist/
 npm run typecheck   # tsc --noEmit (strict)
-npm test            # vitest (56 tests)
+npm test            # vitest (67 tests)
 npm run lint        # eslint
 npm run package     # build + zip → job-smith.zip
 ```
@@ -256,6 +266,12 @@ After `npm run dev`, reload the extension at `chrome://extensions` to pick up ch
 
 - **It does not apply for you.** By design. It assists; you review and submit. That's what keeps
   you off blacklists and keeps your applications honest.
+- **Autofill coverage varies by ATS.** Standard fields on Lever, Greenhouse, Ashby and Workday
+  (name, email, phone, links, company, location) are matched directly; iframe-embedded forms are
+  handled via all-frames injection. Highly custom widgets (some Workday combo-boxes) may still
+  need manual entry — try **Smart Fill (AI)** for those.
+- **Smart Fill needs WebGPU.** It runs the on-device model in an offscreen document; if WebGPU
+  isn't available it simply does nothing extra (deterministic autofill still runs).
 - **JD capture is heuristic.** Pages vary; if capture misses, paste the JD into Résumé Studio.
 - **HN parsing is best-effort.** Free-text posts don't have clean fields; that source is off by
   default.

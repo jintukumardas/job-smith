@@ -22,6 +22,7 @@ function desc(partial: Partial<FieldDescriptor>): FieldDescriptor {
     labelText: "",
     autocomplete: "",
     type: "text",
+    testId: "",
     ...partial,
   };
 }
@@ -60,6 +61,24 @@ describe("fuzzy matching", () => {
 
   it("returns null when nothing is confident", () => {
     expect(bestFieldMatch(desc({ name: "captcha_token", labelText: "Verify" }), FIELDS)).toBeNull();
+  });
+
+  it("handles Lever-style bracket names and org", () => {
+    expect(bestFieldMatch(desc({ name: "urls[LinkedIn]" }), FIELDS)?.field.key).toBe("linkedin");
+    expect(bestFieldMatch(desc({ name: "urls[GitHub]" }), FIELDS)?.field.key).toBe("github");
+    expect(bestFieldMatch(desc({ name: "org", labelText: "Current company" }), FIELDS)?.field.key).toBe(
+      "currentCompany",
+    );
+    expect(bestFieldMatch(desc({ name: "location", labelText: "Location" }), FIELDS)?.field.key).toBe(
+      "location",
+    );
+  });
+
+  it("matches Workday data-automation-id hooks", () => {
+    expect(
+      bestFieldMatch(desc({ testId: "legalNameSection_firstName" }), FIELDS)?.field.key,
+    ).toBe("firstName");
+    expect(bestFieldMatch(desc({ testId: "email" }), FIELDS)?.field.key).toBe("email");
   });
 
   it("maps autocomplete tokens with trailing whitespace", () => {
