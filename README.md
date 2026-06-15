@@ -34,7 +34,7 @@ auto-fills application forms — *without* the bot-like behavior that gets peopl
 | Area | What it does |
 | --- | --- |
 | **Job notifications** | Polls public remote-job sources on a schedule and sends a desktop notification when new listings match your role/location/keyword criteria. Fully configurable; per-source rate limits enforced. |
-| **Résumé tailoring** | Parses a job description, finds your matching/missing skills, and rewrites a tailored résumé **locally** — either with an in-browser LLM (WebLLM/WebGPU) or a deterministic offline engine. Export a clean **ATS-friendly PDF** (single column, selectable text, optional company accent colour), or copy/download Markdown. |
+| **Résumé tailoring** | The on-device LLM (WebLLM/WebGPU) **reads your résumé + the JD and writes the full tailored résumé** — summary, ordered skills, rephrased experience bullets, education — using only facts from your résumé (invented/gap skills are filtered out; a fabricated summary is replaced). A deterministic offline engine is the automatic fallback. Export a clean **ATS-friendly PDF** (single column, selectable text, optional company accent), or copy/download Markdown. |
 | **Paste-to-fill résumé** | Paste your whole résumé once; JobSmith extracts name, contact, location and skills into structured fields (one click), which then feed both tailoring and autofill. |
 | **Auto-fill** | On click, fills empty application fields using values **derived automatically from your résumé** (name, email, phone, location, links, current role) — explicit overrides still win. Matches by `autocomplete`, name/id, label, and ATS `data-*` hooks, and injects into **all frames** so iframe-embedded forms (Greenhouse) work. **Never overwrites your input. Never submits. Never clicks buttons.** |
 | **Smart Fill (AI)** | For fields the matcher can't recognize, the on-device LLM reads their labels and maps them to your résumé (strictly from your data — no fabrication). Runs in an offscreen WebGPU worker; falls back gracefully when unavailable. |
@@ -161,13 +161,16 @@ Use **Track this page** / **Track**, or add entries manually in the Applications
 JobSmith ships two interchangeable engines behind one interface:
 
 - **WebLLM (default).** Runs an open LLM entirely in the browser via WebGPU, inside a dedicated
-  Web Worker. On first use it downloads the model weights from the public MLC/Hugging Face CDN
-  (one-time, ~GBs depending on the model) and caches them. Your résumé and the JD are only ever
-  posted to that local worker — **no personal data is uploaded**. The model is instructed to use
-  *only* facts present in your résumé and never to invent employers, titles or metrics.
-- **Deterministic (fallback / opt-in).** Instant, fully offline, zero download. It extracts JD
-  keywords/skills, reorders your existing bullets by relevance, and composes a tailored summary
-  from your own data. Used automatically whenever WebGPU or the model is unavailable.
+  Web Worker. It **authors the whole tailored résumé**: given your raw résumé text + the JD, it
+  returns structured JSON (summary, ordered skills, rephrased experience bullets, education) that
+  JobSmith renders into the ATS-safe layout. On first use it downloads the model weights from the
+  public MLC/Hugging Face CDN (one-time, ~GBs) and caches them; your résumé and the JD are only
+  ever posted to the local worker — **no personal data is uploaded**. It's instructed to use *only*
+  facts from your résumé; as a safety net JobSmith drops any skill it claims that you don't have
+  and replaces the summary if it slips in a "gap" skill.
+- **Deterministic (fallback).** Instant, fully offline, zero download. It parses your résumé into
+  structured entries, reorders bullets by relevance, and composes a truthful summary from your own
+  data. Used automatically whenever WebGPU or the model is unavailable.
 
 **Changing the model:** Résumé Studio → *WebLLM model*. The default is
 `Llama-3.2-3B-Instruct-q4f16_1-MLC` (good quality/size). For faster, smaller downloads try
