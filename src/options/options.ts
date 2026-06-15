@@ -21,7 +21,7 @@ import {
   listApplications,
   updateApplication,
 } from "../tracker/store.js";
-import { defaultSettings, DEFAULT_AUTOFILL_FIELDS, DEFAULT_MODEL } from "../lib/defaults.js";
+import { defaultSettings, DEFAULT_AUTOFILL_FIELDS, AVAILABLE_MODELS } from "../lib/defaults.js";
 import {
   APP_VERSION,
   APPLICATION_STATUSES,
@@ -186,6 +186,15 @@ function selectInput(
     sel.appendChild(h("option", { value: opt.value, text: opt.label, selected: opt.value === current }));
   }
   return sel;
+}
+
+/** Model dropdown options, including the current value if it's not in the list. */
+function modelOptions(current: string): { value: string; label: string }[] {
+  const opts = AVAILABLE_MODELS.map((m) => ({ value: m.id, label: m.label }));
+  if (current && !opts.some((o) => o.value === current)) {
+    opts.unshift({ value: current, label: `${current} (current)` });
+  }
+  return opts;
 }
 
 function saveBar(label: string, onSave: (status: HTMLElement) => void, extra?: HTMLElement): HTMLElement {
@@ -603,8 +612,8 @@ function renderStudio(): HTMLElement {
         ),
         field(
           "WebLLM model",
-          textInput(llm.model, (v) => (llm.model = v)),
-          `Default: ${DEFAULT_MODEL} (~2GB, runs on typical machines). Higher quality on a strong GPU (~6GB+): Qwen2.5-7B-Instruct-q4f16_1-MLC. See mlc.ai/models.`,
+          selectInput(modelOptions(llm.model), llm.model, (v) => (llm.model = v)),
+          "Pick a model that fits your GPU. JobSmith falls back to the offline engine if it can't run. q4f32 variants suit GPUs without shader-f16.",
         ),
       ),
       field(

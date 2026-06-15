@@ -20,7 +20,7 @@
     "package": "npm run build && node -e \"const{execSync}=require('child_process');execSync('cd dist && zip -r -X ../job-smith.zip .',{stdio:'inherit'})\""
   },
   "dependencies": {
-    "@mlc-ai/web-llm": "^0.2.79"
+    "@mlc-ai/web-llm": "0.2.84"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",
