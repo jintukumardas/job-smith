@@ -71,6 +71,7 @@ export class WebLLMEngine implements ResumeEngine {
       buildResumePrompt(source, req),
       Math.min(req.temperature, 0.35),
       RESUME_MAX_TOKENS,
+      true, // JSON-constrained
     );
     const parsed = parseResumeJson(raw);
     if (!parsed) throw new Error("the model did not return a usable resume");
@@ -94,10 +95,15 @@ export class WebLLMEngine implements ResumeEngine {
   /** Generic single-shot generation (used by the autofill field mapper). */
   async generate(
     messages: ChatMessage[],
-    opts: { maxTokens: number; temperature: number; onProgress?: (p: number, t: string) => void },
+    opts: {
+      maxTokens: number;
+      temperature: number;
+      json?: boolean;
+      onProgress?: (p: number, t: string) => void;
+    },
   ): Promise<string> {
     await this.init(opts.onProgress);
-    return this.chat(messages, opts.temperature, opts.maxTokens);
+    return this.chat(messages, opts.temperature, opts.maxTokens, opts.json ?? false);
   }
 
   dispose(): void {
@@ -183,13 +189,25 @@ export class WebLLMEngine implements ResumeEngine {
     return this.initPromise;
   }
 
-  private chat(messages: ChatMessage[], temperature: number, maxTokens: number): Promise<string> {
+  private chat(
+    messages: ChatMessage[],
+    temperature: number,
+    maxTokens: number,
+    json = false,
+  ): Promise<string> {
     const worker = this.ensureWorker();
     const id = this.nextId++;
     return new Promise<string>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.arm(id, CHAT_TIMEOUT_MS);
-      worker.postMessage({ id, type: "chat", messages, temperature, maxTokens } satisfies LlmToWorker);
+      worker.postMessage({
+        id,
+        type: "chat",
+        messages,
+        temperature,
+        maxTokens,
+        ...(json ? { json: true } : {}),
+      } satisfies LlmToWorker);
     });
   }
 

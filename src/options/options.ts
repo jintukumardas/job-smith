@@ -604,7 +604,7 @@ function renderStudio(): HTMLElement {
         field(
           "WebLLM model",
           textInput(llm.model, (v) => (llm.model = v)),
-          `Default: ${DEFAULT_MODEL}. See mlc.ai/models for options.`,
+          `Default: ${DEFAULT_MODEL} (~5GB, needs ~6GB GPU/unified memory). Lighter: Qwen2.5-3B-Instruct-q4f16_1-MLC. See mlc.ai/models.`,
         ),
       ),
       field(

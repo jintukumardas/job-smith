@@ -30,7 +30,7 @@ export async function mapFieldsWithLlm(
 
   let raw = "";
   try {
-    raw = await engine.generate(buildPrompt(resume, fields), { maxTokens: 800, temperature });
+    raw = await engine.generate(buildPrompt(resume, fields), { maxTokens: 800, temperature, json: true });
   } catch (e) {
     log.warn("field mapping failed", e);
     engine.dispose();

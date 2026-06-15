@@ -10,7 +10,15 @@ export interface ChatMessage {
 
 export type LlmToWorker =
   | { id: number; type: "init"; model: string }
-  | { id: number; type: "chat"; messages: ChatMessage[]; temperature: number; maxTokens: number };
+  | {
+      id: number;
+      type: "chat";
+      messages: ChatMessage[];
+      temperature: number;
+      maxTokens: number;
+      /** Request JSON-constrained decoding (response_format json_object). */
+      json?: boolean;
+    };
 
 export type LlmFromWorker =
   | { id: number; type: "progress"; progress: number; text: string }

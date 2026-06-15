@@ -241,7 +241,7 @@ async function doSmartFill(): Promise<void> {
   }
   if (resp.engine === "none") {
     const why = resp.error || resp.note || "unknown";
-    log.warn("smart fill: AI unavailable", resp);
+    log.warn(`smart fill: AI unavailable — ${why}`);
     flash(gate.status, `Filled ${deterministic} field(s). AI mapping unavailable (${why}).`, "err");
     return;
   }

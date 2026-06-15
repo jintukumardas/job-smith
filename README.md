@@ -172,10 +172,15 @@ JobSmith ships two interchangeable engines behind one interface:
   structured entries, reorders bullets by relevance, and composes a truthful summary from your own
   data. Used automatically whenever WebGPU or the model is unavailable.
 
-**Changing the model:** Résumé Studio → *WebLLM model*. The default is
-`Llama-3.2-3B-Instruct-q4f16_1-MLC` (good quality/size). For faster, smaller downloads try
-`Llama-3.2-1B-Instruct-q4f32_1-MLC`; for higher quality try an 8B model. See
-<https://mlc.ai/models> for valid ids. Saving the engine settings resets the warm model.
+**Choosing the model:** Résumé Studio → *WebLLM model*. The default is
+`Qwen2.5-7B-Instruct-q4f16_1-MLC` — the best in-browser model for this task (strong
+instruction-following + reliable structured JSON), ~5 GB one-time download, needs ~6 GB
+GPU/unified memory. On lighter machines use `Qwen2.5-3B-Instruct-q4f16_1-MLC` (~2 GB) or
+`Llama-3.2-3B-Instruct-q4f16_1-MLC`; if your GPU lacks shader-f16, use a `q4f32_1` variant.
+JobSmith also requests **JSON-constrained decoding**, which keeps output well-formed across
+models. See <https://mlc.ai/models> for valid ids. Saving the engine settings resets the warm
+model. (Tip: the model is shared/cached across Résumé Studio and Smart Fill — tailor once to
+warm it, then Smart Fill is fast.)
 
 ---
 

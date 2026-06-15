@@ -61,6 +61,9 @@ ctx.onmessage = async (ev: MessageEvent<LlmToWorker>): Promise<void> => {
         temperature: msg.temperature,
         max_tokens: msg.maxTokens,
         stream: false,
+        // JSON-constrained decoding dramatically improves structured-output
+        // reliability (WebLLM enforces it via its grammar engine).
+        ...(msg.json ? { response_format: { type: "json_object" } } : {}),
       });
       const content = completion.choices?.[0]?.message?.content ?? "";
       post({ id: msg.id, type: "result", content });
