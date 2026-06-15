@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="options.css" />
+    <title>JobSmith — Settings</title>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="logo">JS</span>
+        <div>
+          <div class="brand-name">JobSmith</div>
+          <div class="brand-sub">Local job assistant</div>
+        </div>
+      </div>
+      <nav id="nav">
+        <button class="nav-item active" data-section="jobs">🔎 Job search</button>
+        <button class="nav-item" data-section="resume">📄 Resume</button>
+        <button class="nav-item" data-section="studio">✨ Resume studio</button>
+        <button class="nav-item" data-section="autofill">⌨ Autofill</button>
+        <button class="nav-item" data-section="notifications">🔔 Notifications</button>
+        <button class="nav-item" data-section="applications">📋 Applications</button>
+        <button class="nav-item" data-section="privacy">🛡 Privacy &amp; safety</button>
+      </nav>
+      <div class="sidebar-foot">
+        <span id="version" class="muted small"></span>
+      </div>
+    </aside>
+
+    <main class="content">
+      <div id="view"></div>
+    </main>
+
+    <script src="options.js"></script>
+  </body>
+</html>
