@@ -9,10 +9,11 @@
 import type { ResumeData, ResumeExperience, Settings, TailoredResume } from "../types/index.js";
 import type { EngineProgress, ResumeEngine } from "./engine.js";
 import { extractJd } from "./jd-parser.js";
+import { enrichResume } from "./parse-resume.js";
 import { detectSkills, normalizeSkill, sameSkill } from "./skills.js";
 import { DeterministicEngine } from "./deterministic.js";
 import { WebLLMEngine } from "./webllm.js";
-import { renderResumeMarkdown, type RenderedExperience } from "./render.js";
+import { renderResumeMarkdown, renderResumeHtml, type RenderedExperience } from "./render.js";
 import { tokenize, uniqCi } from "../lib/util.js";
 import { createLogger } from "../lib/logger.js";
 
@@ -88,6 +89,7 @@ export async function tailorResume(
   settings: Settings,
   options: TailorOptions = {},
 ): Promise<TailoredResume> {
+  resume = enrichResume(resume); // fill empty fields from pasted base text
   const analysis = extractJd(jdText);
   const { matched, missing, resumeSkills } = computeSkillMatch(resume, analysis.skills);
 
@@ -165,11 +167,14 @@ function assemble(
 
   const summary = engineResult.summary.trim() || resume.summary.trim();
 
-  const markdown = renderResumeMarkdown({ resume, summary, orderedSkills, experiences });
+  const renderInput = { resume, summary, orderedSkills, experiences };
+  const markdown = renderResumeMarkdown(renderInput);
+  const html = renderResumeHtml(renderInput);
   const matchScore = computeMatchScore(matched, analysis, resume, resumeSkills);
 
   return {
     markdown,
+    html,
     engine: engineKind,
     matchedSkills: matched,
     missingSkills: missing,

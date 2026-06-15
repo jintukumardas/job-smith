@@ -4,9 +4,11 @@
  * the derived one. Pure & unit-testable.
  */
 import type { AutofillField, ResumeData, Settings } from "../types/index.js";
+import { enrichResume } from "../resume/parse-resume.js";
 
 /** Map resume data onto canonical autofill keys. */
-export function deriveAutofillValues(resume: ResumeData, now = Date.now()): Record<string, string> {
+export function deriveAutofillValues(rawResume: ResumeData, now = Date.now()): Record<string, string> {
+  const resume = enrichResume(rawResume); // also mine the pasted base resume text
   const out: Record<string, string> = {};
   const set = (key: string, value: string | undefined): void => {
     if (value && value.trim() && !out[key]) out[key] = value.trim();

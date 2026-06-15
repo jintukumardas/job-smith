@@ -13,6 +13,8 @@ import {
 import { sendToBackground } from "../lib/messaging.js";
 import { PROVIDERS } from "../jobs/providers/index.js";
 import { resetEngineCache, tailorResume } from "../resume/tailor.js";
+import { parseResumeText } from "../resume/parse-resume.js";
+import { buildResumeDocument } from "../resume/render.js";
 import {
   addApplication,
   deleteApplication,
@@ -301,6 +303,41 @@ function renderJobs(): HTMLElement {
 
 function renderResume(): HTMLElement {
   const r = settings.resume;
+
+  const importBar = (): HTMLElement => {
+    const status = h("span", { class: "flash" });
+    return h(
+      "div",
+      { class: "toolbar" },
+      h("button", {
+        class: "secondary",
+        text: "Import details from pasted text",
+        onclick: async () => {
+          if (!r.baseResumeText.trim()) {
+            flash(status, "Paste your resume above first.", "err");
+            return;
+          }
+          const p = parseResumeText(r.baseResumeText);
+          let n = 0;
+          if (!r.fullName && p.fullName) { r.fullName = p.fullName; n++; }
+          if (!r.headline && p.headline) { r.headline = p.headline; n++; }
+          if (!r.email && p.email) { r.email = p.email; n++; }
+          if (!r.phone && p.phone) { r.phone = p.phone; n++; }
+          if (!r.location && p.location) { r.location = p.location; n++; }
+          if (r.links.length === 0 && p.links.length > 0) { r.links = p.links; n++; }
+          if (r.skills.length === 0 && p.skills.length > 0) { r.skills = p.skills; n += p.skills.length; }
+          await saveSettings(settings);
+          if (n === 0) {
+            flash(status, "Nothing new found (fields already filled, or no contact/skills detected).", "err");
+          } else {
+            switchTo("resume"); // re-render with the imported values shown
+          }
+        },
+      }),
+      status,
+    );
+  };
+
   const expCard = card("Experience");
   const expList = h("div", {});
   const renderExp = (): void => {
@@ -426,12 +463,13 @@ function renderResume(): HTMLElement {
     eduCard,
     linksCard,
     card(
-      "Base resume text (optional)",
-      field(
-        "Paste your full resume",
-        textArea(r.baseResumeText, (v) => (r.baseResumeText = v), 8),
-        "Used as extra context for tailoring and skill detection.",
-      ),
+      "Base resume text",
+      h("div", {
+        class: "note info",
+        text: "Paste your whole resume here, then click Import to auto-fill the fields above. Contact details and skills are extracted automatically; you can edit anything. This text is also used as extra context for tailoring.",
+      }),
+      field("Paste your full resume", textArea(r.baseResumeText, (v) => (r.baseResumeText = v), 8)),
+      importBar(),
     ),
     saveBar("Save resume", (s) => void persist(s)),
   );
@@ -493,8 +531,12 @@ function renderStudio(): HTMLElement {
       mount(results, h("div", { class: "note warn", text: "Paste a job description first." }));
       return;
     }
-    if (!settings.resume.fullName && settings.resume.experiences.length === 0) {
-      mount(results, h("div", { class: "note warn", text: "Add your resume details first (Resume tab)." }));
+    const hasResume =
+      settings.resume.fullName.trim().length > 0 ||
+      settings.resume.experiences.length > 0 ||
+      settings.resume.baseResumeText.trim().length > 0;
+    if (!hasResume) {
+      mount(results, h("div", { class: "note warn", text: "Add your resume in the Resume tab first (fill the fields or paste your full resume)." }));
       return;
     }
     runBtn.disabled = true;
@@ -591,6 +633,8 @@ function renderTailorResult(container: HTMLElement, t: TailoredResume): void {
   );
 
   const output = h("textarea", { rows: 18, class: "mono" }, t.markdown);
+  const accent = h("input", { type: "color", value: deriveAccent(pendingTailor?.company ?? "") });
+  const exportStatus = h("span", { class: "flash" });
 
   mount(
     container,
@@ -614,14 +658,27 @@ function renderTailorResult(container: HTMLElement, t: TailoredResume): void {
       ),
     ),
     ...t.notes.map((n) => h("div", { class: "note ok small", text: n })),
+    h("div", {
+      class: "note info small",
+      text: "PDF export is a single-column, selectable-text layout — the ATS-safe choice. The accent colour (name + section rules) can match the company; the body stays neutral so parsers read it cleanly.",
+    }),
     h("div", { class: "field", style: { marginTop: "12px" } }, h("label", { text: "Tailored resume (Markdown)" }), output),
     h(
       "div",
       { class: "toolbar" },
       h("button", {
+        class: "action",
+        text: "Save as PDF (ATS-friendly)",
+        onclick: () => savePdf(t, accent.value, exportStatus),
+      }),
+      h("label", { class: "small muted" }, "Accent ", accent),
+      h("button", {
         class: "secondary",
         text: "Copy",
-        onclick: () => navigator.clipboard.writeText(output.value),
+        onclick: () => {
+          void navigator.clipboard.writeText(output.value);
+          flash(exportStatus, "Copied.", "ok");
+        },
       }),
       h("button", {
         class: "secondary",
@@ -642,11 +699,62 @@ function renderTailorResult(container: HTMLElement, t: TailoredResume): void {
                 jobDescription: pendingTailor?.jd,
               });
               await chrome.storage.session.remove("pendingTailor");
+              flash(exportStatus, "Saved to Applications.", "ok");
             },
           })
         : null,
+      exportStatus,
     ),
   );
+}
+
+function savePdf(t: TailoredResume, accentColor: string, status: HTMLElement): void {
+  const name =
+    settings.resume.fullName ||
+    parseResumeText(settings.resume.baseResumeText).fullName ||
+    "Resume";
+  const doc = buildResumeDocument(t.html, { title: `${name} - Resume`, accent: accentColor });
+  const w = window.open("", "_blank", "width=840,height=1080");
+  if (!w) {
+    flash(status, "Allow pop-ups for this page, then try again.", "err");
+    return;
+  }
+  w.document.open();
+  w.document.write(doc);
+  w.document.close();
+  // Trigger print from the opener (robust even if the new window inherits a CSP
+  // that would block an inline script). The user picks "Save as PDF".
+  window.setTimeout(() => {
+    try {
+      w.focus();
+      w.print();
+    } catch {
+      /* user can still print manually */
+    }
+  }, 350);
+  flash(status, "Opened the résumé — use the print dialog and choose “Save as PDF”.", "ok");
+}
+
+/** A professional, deterministic accent colour derived from the company name. */
+function deriveAccent(company: string): string {
+  if (!company.trim()) return "#1f3a8a";
+  let hash = 0;
+  for (const ch of company) hash = (Math.imul(hash, 31) + ch.charCodeAt(0)) >>> 0;
+  return hslToHex(hash % 360, 60, 32);
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const sf = s / 100;
+  const lf = l / 100;
+  const a = sf * Math.min(lf, 1 - lf);
+  const f = (n: number): string => {
+    const k = (n + h / 30) % 12;
+    const c = lf - a * Math.max(-1, Math.min(k - 3, Math.min(9 - k, 1)));
+    return Math.round(255 * c)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
 }
 
 /* -------------------------------- Autofill ------------------------------- */
