@@ -56,16 +56,31 @@ ctx.onmessage = async (ev: MessageEvent<LlmToWorker>): Promise<void> => {
 
     if (msg.type === "chat") {
       if (!engine) throw new Error("Model not initialized");
-      const completion = await engine.chat.completions.create({
+      // NOTE: we deliberately do NOT use `response_format: { type: "json_object" }`.
+      // WebLLM's grammar/JSON engine crashes on some GPUs with an UNCATCHABLE
+      // "BindingError: Cannot pass non-string to std::string" (a floating promise
+      // inside the runtime), which would kill the whole generation. Our prompts
+      // already require JSON-only output and every caller extracts the object with
+      // a tolerant first-`{`…last-`}` parse, so grammar mode buys little and costs
+      // reliability. `msg.json` is kept as a hint only.
+      //
+      // We STREAM tokens so the UI can show live progress (the model can take tens
+      // of seconds) and the engine can reset its idle timeout on each chunk instead
+      // of guessing one big timeout for the whole generation.
+      const stream = await engine.chat.completions.create({
         messages: msg.messages,
         temperature: msg.temperature,
         max_tokens: msg.maxTokens,
-        stream: false,
-        // JSON-constrained decoding dramatically improves structured-output
-        // reliability (WebLLM enforces it via its grammar engine).
-        ...(msg.json ? { response_format: { type: "json_object" } } : {}),
+        stream: true,
       });
-      const content = completion.choices?.[0]?.message?.content ?? "";
+      let content = "";
+      for await (const chunk of stream) {
+        const delta = chunk.choices?.[0]?.delta?.content ?? "";
+        if (delta) {
+          content += delta;
+          post({ id: msg.id, type: "delta", text: delta });
+        }
+      }
       post({ id: msg.id, type: "result", content });
       return;
     }

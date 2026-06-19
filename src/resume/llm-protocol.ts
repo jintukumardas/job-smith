@@ -16,13 +16,15 @@ export type LlmToWorker =
       messages: ChatMessage[];
       temperature: number;
       maxTokens: number;
-      /** Request JSON-constrained decoding (response_format json_object). */
+      /** Kept for back-compat; no longer used to force grammar decoding. */
       json?: boolean;
     };
 
 export type LlmFromWorker =
   | { id: number; type: "progress"; progress: number; text: string }
   | { id: number; type: "ready" }
+  /** A streamed token chunk during generation (proves liveness + bounds hangs). */
+  | { id: number; type: "delta"; text: string }
   | { id: number; type: "result"; content: string }
   | { id: number; type: "error"; error: string };
 

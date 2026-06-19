@@ -37,6 +37,20 @@ export function resetEngineCache(): void {
   cachedWebLLM = null;
 }
 
+/**
+ * Return the warm, cached WebLLM engine if on-device AI is enabled AND usable
+ * (WebGPU present), else null. Shared so résumé parsing, tailoring and cover
+ * letters all reuse a single model load in one page session.
+ */
+export async function getWebLLMEngine(settings: Settings): Promise<WebLLMEngine | null> {
+  if (!settings.llm.enabled || settings.llm.engine !== "webllm") return null;
+  if (!cachedWebLLM || cachedWebLLM.model !== settings.llm.model) {
+    cachedWebLLM?.engine.dispose();
+    cachedWebLLM = { model: settings.llm.model, engine: new WebLLMEngine(settings.llm.model) };
+  }
+  return (await cachedWebLLM.engine.isAvailable()) ? cachedWebLLM.engine : null;
+}
+
 async function resolveEngine(
   settings: Settings,
   force: TailorOptions["forceEngine"],
