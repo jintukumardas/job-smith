@@ -18,16 +18,19 @@ interface Pending {
   resolve: (value: string) => void;
   reject: (err: Error) => void;
   onProgress?: (progress: number, text: string) => void;
+  /** Called with each streamed token chunk during generation. */
+  onToken?: (text: string) => void;
   timer?: ReturnType<typeof setTimeout>;
-  /** If set, the timeout is an IDLE timeout reset on every progress event. */
+  /** If set, the timeout is an IDLE timeout reset on every progress/token event. */
   idleMs?: number;
 }
 
 const RESUME_MAX_TOKENS = 2048;
-// Bound generation; the model download (init) uses an idle timeout reset by
-// progress events so a slow-but-advancing download is never killed.
-const CHAT_TIMEOUT_MS = 240_000;
+// Both download (init) and generation (chat) use IDLE timeouts reset by progress
+// or token events, so a slow-but-advancing operation is never killed — only a
+// truly stalled one (no token for this long) is given up on.
 const INIT_IDLE_TIMEOUT_MS = 180_000;
+const CHAT_IDLE_TIMEOUT_MS = 120_000;
 
 export class WebLLMEngine implements ResumeEngine {
   readonly kind = "webllm" as const;
@@ -100,10 +103,12 @@ export class WebLLMEngine implements ResumeEngine {
       temperature: number;
       json?: boolean;
       onProgress?: (p: number, t: string) => void;
+      /** Called with each streamed token chunk (for live "it's working" UI). */
+      onToken?: (text: string) => void;
     },
   ): Promise<string> {
     await this.init(opts.onProgress);
-    return this.chat(messages, opts.temperature, opts.maxTokens, opts.json ?? false);
+    return this.chat(messages, opts.temperature, opts.maxTokens, opts.json ?? false, opts.onToken);
   }
 
   dispose(): void {
@@ -161,6 +166,11 @@ export class WebLLMEngine implements ResumeEngine {
       if (entry?.idleMs) this.arm(msg.id, entry.idleMs); // reset the idle timeout
       return;
     }
+    if (msg.type === "delta") {
+      entry?.onToken?.(msg.text);
+      if (entry?.idleMs) this.arm(msg.id, entry.idleMs); // each token resets the idle clock
+      return;
+    }
     if (!entry) return;
     if (entry.timer) clearTimeout(entry.timer);
     this.pending.delete(msg.id);
@@ -194,12 +204,18 @@ export class WebLLMEngine implements ResumeEngine {
     temperature: number,
     maxTokens: number,
     json = false,
+    onToken?: (text: string) => void,
   ): Promise<string> {
     const worker = this.ensureWorker();
     const id = this.nextId++;
     return new Promise<string>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.arm(id, CHAT_TIMEOUT_MS);
+      this.pending.set(id, {
+        resolve,
+        reject,
+        idleMs: CHAT_IDLE_TIMEOUT_MS,
+        ...(onToken ? { onToken } : {}),
+      });
+      this.arm(id, CHAT_IDLE_TIMEOUT_MS);
       worker.postMessage({
         id,
         type: "chat",

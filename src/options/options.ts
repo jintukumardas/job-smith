@@ -12,8 +12,11 @@ import {
 } from "../lib/storage.js";
 import { sendToBackground } from "../lib/messaging.js";
 import { PROVIDERS } from "../jobs/providers/index.js";
+import { buildDiscoverySearches } from "../jobs/discovery.js";
 import { resetEngineCache, tailorResume } from "../resume/tailor.js";
 import { parseResumeText } from "../resume/parse-resume.js";
+import { parseResumeWithLlm, mergeParsed, applyParsedToResume } from "../resume/parse-resume-llm.js";
+import { generateCoverLetter } from "../resume/cover-letter.js";
 import { buildResumeDocument } from "../resume/render.js";
 import {
   addApplication,
@@ -26,6 +29,7 @@ import {
   APP_VERSION,
   APPLICATION_STATUSES,
   type Application,
+  type ResumeData,
   type ResumeExperience,
   type Settings,
   type TailoredResume,
@@ -38,6 +42,8 @@ const log = createLogger("options");
 let settings: Settings;
 let pendingTailor: { jd: string; title: string; company: string; url: string } | null = null;
 let currentSection = "jobs";
+/** A note to show on the Résumé tab after an import re-renders it. */
+let pendingResumeNote: { msg: string; kind: "ok" | "err" } | null = null;
 
 /* ------------------------------- bootstrap ------------------------------- */
 
@@ -277,6 +283,7 @@ function renderJobs(): HTMLElement {
       ),
     ),
     providersCard,
+    discoveryCard(),
     saveBar(
       "Save & reschedule",
       (s) => void persist(s, { reschedule: true }),
@@ -308,46 +315,144 @@ function renderJobs(): HTMLElement {
   );
 }
 
+/** One-click ATS/career-page dorks + direct board searches from the criteria. */
+function discoveryCard(): HTMLElement {
+  const list = h("div", {});
+  const render = (): void => {
+    const searches = buildDiscoverySearches({
+      roles: settings.jobSearch.roles,
+      keywords: settings.jobSearch.keywords,
+      excludeKeywords: settings.jobSearch.excludeKeywords,
+      locations: settings.jobSearch.locations,
+      remoteOnly: settings.jobSearch.remoteOnly,
+    });
+    clear(list);
+    for (const cat of ["ATS / career pages", "Search engines", "Job boards"] as const) {
+      const items = searches.filter((s) => s.category === cat);
+      if (!items.length) continue;
+      list.appendChild(h("div", { class: "small muted", style: { marginTop: "10px", fontWeight: "700" }, text: cat }));
+      for (const s of items) {
+        list.appendChild(
+          h(
+            "div",
+            { class: "list-item" },
+            h(
+              "div",
+              {},
+              h("a", { href: s.url, target: "_blank", rel: "noopener", text: s.label }),
+              h("span", { class: "small muted", text: ` — ${s.description}` }),
+            ),
+            s.query
+              ? h("div", {
+                  class: "small muted",
+                  style: { fontFamily: "monospace", wordBreak: "break-all", marginTop: "2px" },
+                  text: s.query,
+                })
+              : null,
+          ),
+        );
+      }
+    }
+  };
+  render();
+
+  return card(
+    "Discover more jobs",
+    h("div", {
+      class: "note info small",
+      text: "One-click searches built from your criteria above — ATS/career-page dorks (Greenhouse, Lever, Ashby, Workday…) plus direct boards. Edit Roles/Locations above, then Refresh.",
+    }),
+    h(
+      "div",
+      { class: "toolbar" },
+      h("button", { class: "secondary", text: "Refresh searches", onclick: render }),
+    ),
+    list,
+  );
+}
+
 /* --------------------------------- Resume -------------------------------- */
+
+/**
+ * Import the pasted résumé into the structured fields. Uses the on-device LLM to
+ * *understand* the text when available (merged with the deterministic regex parse
+ * as a safety net), else falls back to the deterministic parser alone.
+ */
+async function runImport(r: ResumeData, status: HTMLElement): Promise<void> {
+  const det = parseResumeText(r.baseResumeText);
+  let parsed = det;
+  let usedAi = false;
+
+  if (settings.llm.enabled && settings.llm.engine === "webllm") {
+    flash(status, "Reading your résumé with on-device AI…", "ok");
+    const ai = await parseResumeWithLlm(
+      r.baseResumeText,
+      settings,
+      (progress) => {
+        flash(
+          status,
+          progress < 1
+            ? `Downloading AI model ${Math.round(progress * 100)}%… (first run only — keep this tab open)`
+            : "Model ready — understanding your résumé…",
+          "ok",
+        );
+      },
+      (chars) => {
+        // Live token stream → the user can see it's actively working.
+        flash(status, `Understanding your résumé… (${chars} characters written)`, "ok");
+      },
+    );
+    if (ai) {
+      parsed = mergeParsed(ai, det);
+      usedAi = true;
+    } else {
+      flash(status, "On-device AI didn't return usable data — used the quick text parser instead.", "err");
+    }
+  }
+
+  const changed = applyParsedToResume(r, parsed);
+  await saveSettings(settings);
+
+  if (changed === 0) {
+    flash(status, "Couldn't pull anything usable out of that text. Check the formatting and try again.", "err");
+    return;
+  }
+  pendingResumeNote = {
+    msg: `${usedAi ? "AI import" : "Quick import"}: filled the fields below from your résumé. Review, then Save résumé.`,
+    kind: "ok",
+  };
+  switchTo("resume"); // re-render so the populated fields show
+}
 
 function renderResume(): HTMLElement {
   const r = settings.resume;
 
   const importBar = (): HTMLElement => {
     const status = h("span", { class: "flash" });
-    return h(
-      "div",
-      { class: "toolbar" },
-      h("button", {
-        class: "secondary",
-        text: "Import details from pasted text",
-        onclick: async () => {
-          if (!r.baseResumeText.trim()) {
-            flash(status, "Paste your resume above first.", "err");
-            return;
-          }
-          const p = parseResumeText(r.baseResumeText);
-          let n = 0;
-          if (!r.fullName && p.fullName) { r.fullName = p.fullName; n++; }
-          if (!r.headline && p.headline) { r.headline = p.headline; n++; }
-          if (!r.email && p.email) { r.email = p.email; n++; }
-          if (!r.phone && p.phone) { r.phone = p.phone; n++; }
-          if (!r.location && p.location) { r.location = p.location; n++; }
-          if (r.links.length === 0 && p.links.length > 0) { r.links = p.links; n++; }
-          if (r.skills.length === 0 && p.skills.length > 0) { r.skills = p.skills; n += p.skills.length; }
-          if (r.experiences.length === 0 && p.experiences.length > 0) { r.experiences = p.experiences; n += p.experiences.length; }
-          if (r.education.length === 0 && p.education.length > 0) { r.education = p.education; n += p.education.length; }
-          if (!(r.extraSections?.length) && p.extraSections.length > 0) { r.extraSections = p.extraSections; n += p.extraSections.length; }
-          await saveSettings(settings);
-          if (n === 0) {
-            flash(status, "Nothing new found (fields already filled, or no contact/skills detected).", "err");
-          } else {
-            switchTo("resume"); // re-render with the imported values shown
-          }
-        },
-      }),
-      status,
-    );
+    const btn = h("button", {
+      class: "secondary",
+      text: "Import details from pasted text",
+      onclick: async () => {
+        if (!r.baseResumeText.trim()) {
+          flash(status, "Paste your resume above first.", "err");
+          return;
+        }
+        btn.disabled = true;
+        try {
+          await runImport(r, status);
+        } catch (e) {
+          log.error("résumé import failed", e);
+          flash(status, "Import failed — see console. Try again.", "err");
+        } finally {
+          btn.disabled = false;
+        }
+      },
+    });
+    if (pendingResumeNote) {
+      flash(status, pendingResumeNote.msg, pendingResumeNote.kind);
+      pendingResumeNote = null;
+    }
+    return h("div", { class: "toolbar" }, btn, status);
   };
 
   const expCard = card("Experience");
@@ -633,6 +738,91 @@ function renderStudio(): HTMLElement {
       progressWrap,
       results,
     ),
+    coverLetterCard(jdInput as HTMLTextAreaElement),
+  );
+}
+
+/** Reads the shared JD textarea and writes a truthful, on-device cover letter. */
+function coverLetterCard(jdInput: HTMLTextAreaElement): HTMLElement {
+  const output = h("textarea", { rows: 14, class: "mono" });
+  const status = h("span", { class: "flash" });
+  const progress = h("div", { class: "small muted" });
+  const btn = h("button", { class: "action", text: "Generate cover letter" });
+
+  btn.addEventListener("click", async () => {
+    const jd = jdInput.value.trim();
+    if (!jd) {
+      flash(status, "Paste a job description in the Tailor card first.", "err");
+      return;
+    }
+    if (!hasResumeData()) {
+      flash(status, "Add your résumé in the Résumé tab first.", "err");
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = "Writing…";
+    try {
+      const res = await generateCoverLetter(
+        settings.resume,
+        jd,
+        { title: pendingTailor?.title, company: pendingTailor?.company },
+        settings,
+        (p, m) => {
+          progress.textContent =
+            p < 1 ? `Loading on-device model ${Math.round(p * 100)}%… (first run only)` : m || "Writing…";
+        },
+      );
+      output.value = res.text;
+      flash(
+        status,
+        `Cover letter ready (${res.engine === "webllm" ? "on-device AI" : "offline template"}). Review and edit before sending.`,
+        "ok",
+      );
+    } catch (e) {
+      log.error("cover letter failed", e);
+      flash(status, "Couldn't generate a cover letter. Try again.", "err");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Generate cover letter";
+      progress.textContent = "";
+    }
+  });
+
+  return card(
+    "Cover letter",
+    h("div", {
+      class: "note info small",
+      text: "Writes a short, truthful cover letter from your résumé + the JD above — entirely on-device. It only uses facts from your résumé and won't inflate your roles.",
+    }),
+    h("div", { class: "toolbar" }, btn, status),
+    progress,
+    h("div", { class: "field" }, h("label", { text: "Cover letter" }), output),
+    h(
+      "div",
+      { class: "toolbar" },
+      h("button", {
+        class: "secondary",
+        text: "Copy",
+        onclick: () => {
+          void navigator.clipboard.writeText(output.value);
+          flash(status, "Copied.", "ok");
+        },
+      }),
+      h("button", {
+        class: "secondary",
+        text: "Download .txt",
+        onclick: () => download(`cover-letter-${Date.now()}.txt`, output.value, "text/plain"),
+      }),
+    ),
+  );
+}
+
+/** Whether there's enough résumé data to generate from. */
+function hasResumeData(): boolean {
+  return (
+    settings.resume.fullName.trim().length > 0 ||
+    settings.resume.experiences.length > 0 ||
+    settings.resume.baseResumeText.trim().length > 0
   );
 }
 

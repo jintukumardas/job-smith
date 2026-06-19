@@ -5,7 +5,7 @@
  * messaging — the popup drives the content API directly via chrome.scripting so
  * it can target and aggregate across all frames.
  */
-import type { ProviderState } from "../types/index.js";
+import type { ProviderState, ResumeData } from "../types/index.js";
 
 /* ------------------------------ Shared payloads --------------------------- */
 
@@ -55,10 +55,24 @@ export interface FieldForLlm {
   options?: string[];
 }
 
+/** The role overview captured from the page, so the model can tailor answers. */
+export interface JdContext {
+  text: string;
+  title?: string;
+  company?: string;
+}
+
 export interface MapFieldsRequest {
   target: "offscreen";
   type: "MAP_FIELDS";
   fields: FieldForLlm[];
+  /** The job posting / role overview read from the page (optional). */
+  jd?: JdContext;
+  // The offscreen document can't read chrome.storage (Chrome restricts offscreen
+  // docs to chrome.runtime), so the caller passes everything the model needs.
+  resume: ResumeData;
+  model: string;
+  temperature: number;
 }
 
 export interface MapFieldsResponse {
@@ -67,6 +81,35 @@ export interface MapFieldsResponse {
   engine: "webllm" | "none";
   note?: string;
   error?: string;
+}
+
+/**
+ * Progress pings from the offscreen LLM host back to the popup so a long model
+ * download never looks frozen. Broadcast (no response expected).
+ */
+export interface MapProgress {
+  type: "MAP_PROGRESS";
+  phase: "loading-model" | "generating";
+  /** 0..1 when known (model download), omitted otherwise. */
+  progress?: number;
+  message: string;
+}
+
+export function sendMapProgress(p: MapProgress): void {
+  try {
+    chrome.runtime.sendMessage(p, () => void chrome.runtime.lastError);
+  } catch {
+    /* no listener (popup closed) — safe to ignore */
+  }
+}
+
+/** Listen for MAP_PROGRESS pings in the popup. Returns an unsubscribe fn. */
+export function onMapProgress(handler: (p: MapProgress) => void): () => void {
+  const listener = (msg: unknown): void => {
+    if ((msg as MapProgress)?.type === "MAP_PROGRESS") handler(msg as MapProgress);
+  };
+  chrome.runtime.onMessage.addListener(listener);
+  return () => chrome.runtime.onMessage.removeListener(listener);
 }
 
 export function sendToOffscreen(req: MapFieldsRequest): Promise<MapFieldsResponse> {
@@ -120,8 +163,10 @@ export function onBackgroundMessage(
   handler: (req: BgRequest) => Promise<BgResponse>,
 ): void {
   chrome.runtime.onMessage.addListener((req: BgRequest, _sender, sendResponse) => {
-    // Offscreen-targeted messages are handled by the offscreen document only.
-    if ((req as { target?: string })?.target === "offscreen") return false;
+    // Offscreen-targeted messages are handled by the offscreen document only;
+    // progress pings are fire-and-forget for the popup. Ignore both here.
+    const tag = req as { target?: string; type?: string };
+    if (tag?.target === "offscreen" || tag?.type === "MAP_PROGRESS") return false;
     handler(req)
       .then(sendResponse)
       .catch((e) =>

@@ -240,3 +240,7 @@ section {
 .flash.err {
   color: var(--err);
 }
+
+.flash.info {
+  color: var(--brand);
+}
