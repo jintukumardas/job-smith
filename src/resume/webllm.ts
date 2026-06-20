@@ -25,7 +25,7 @@ interface Pending {
   idleMs?: number;
 }
 
-const RESUME_MAX_TOKENS = 3072; // headroom so longer résumés keep all their bullets
+const RESUME_MAX_TOKENS = 4096; // headroom so longer résumés keep all their bullets
 // Both download (init) and generation (chat) use IDLE timeouts reset by progress
 // or token events, so a slow-but-advancing operation is never killed — only a
 // truly stalled one (no token for this long) is given up on.
@@ -232,10 +232,15 @@ export class WebLLMEngine implements ResumeEngine {
 /* ----------------------------- prompt + parsing -------------------------- */
 
 const RESUME_SCHEMA = `{
-  "summary": "2-3 sentence professional summary tailored to the job",
+  "summary": "3-4 sentence professional summary tailored to the job",
   "skills": ["ALL of the candidate's skills from the source, most relevant first"],
   "experiences": [
-    {"title": "", "company": "", "startDate": "", "endDate": "", "location": "", "bullets": ["rephrased achievement from the source"]}
+    {"title": "", "company": "", "startDate": "", "endDate": "", "location": "", "bullets": [
+      "a strong, specific rephrased achievement from the source",
+      "another achievement from the SAME role — keep every bullet the source role has",
+      "a third achievement; do NOT collapse a role down to 1-2 bullets",
+      "...continue until ALL of this role's source bullets are represented"
+    ]}
   ],
   "education": [{"degree": "", "institution": "", "year": ""}],
   "sections": [{"heading": "Achievements", "items": ["from the source"]}]
@@ -250,7 +255,9 @@ function buildResumePrompt(source: string, req: TailorRequest): ChatMessage[] {
         "STRICT RULES: use ONLY facts found in the SOURCE RESUME — never invent companies, titles, dates, " +
         "degrees, numbers/metrics, or skills, and never inflate seniority. You may rephrase bullets and " +
         "REORDER them to emphasize what matches the job, but KEEP EVERY ROLE and EVERY substantive bullet " +
-        "point — do not omit or over-summarize experience (a role should keep all its bullets, rephrased). " +
+        "point — do not omit or over-summarize experience. Each role MUST keep ALL of its source bullets " +
+        "(typically 4-8), each rewritten as a specific, concrete achievement — NEVER reduce a role to 1-2 " +
+        "bullets. Prefer concrete detail (what was built, the hard part, the outcome) over vague phrasing. " +
         "Do NOT add skills the candidate does not have. For \"skills\", return the candidate's real skills " +
         "MOST-RELEVANT FIRST, deduplicated (no near-duplicates like 'C', 'C++' and 'C/C++' together). " +
         "Include ALL relevant extra sections from the source (achievements, projects, certifications, etc.) " +

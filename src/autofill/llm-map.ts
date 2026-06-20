@@ -8,6 +8,11 @@
  *
  * It is truthful by construction: the prompt forbids inventing facts or inflating
  * seniority; selects are matched back to a real option; "SKIP" answers are dropped.
+ *
+ * Quality: the model sees the FULL résumé (all roles + bullets + projects), is
+ * told to answer each field with ONE focused, in-depth example (not a blend),
+ * honours word-count hints in the question, and is shown earlier answers so it
+ * picks a different accomplishment instead of repeating itself.
  */
 import type { FieldForLlm, JdContext, MapFieldsResponse, MapProgress } from "../lib/messaging.js";
 import type { ResumeData } from "../types/index.js";
@@ -38,6 +43,9 @@ export async function mapFieldsWithLlm(
   const profile = buildProfile(resume);
   const role = jd ? roleOverview(jd) : "";
   const map: Record<string, string> = {};
+  // Short gist of each open-ended answer already written, so later fields pick a
+  // DIFFERENT example instead of repeating the same story across questions.
+  const priorOpenEnded: string[] = [];
   let lastError: string | undefined;
 
   const announce = (i: number, field: FieldForLlm): void =>
@@ -51,7 +59,7 @@ export async function mapFieldsWithLlm(
     const field = fields[i];
     if (i > 0) announce(i, field); // model is warm; announce before generating
     try {
-      const answer = await engine.generate(buildFieldPrompt(profile, role, field), {
+      const answer = await engine.generate(buildFieldPrompt(profile, role, field, priorOpenEnded.slice(-4)), {
         maxTokens: maxTokensFor(field),
         temperature: Math.min(temperature, isOpenEnded(field) ? 0.6 : 0.2),
         // Only the FIRST field can trigger the (one-time) model download; surface
@@ -73,7 +81,10 @@ export async function mapFieldsWithLlm(
             : undefined,
       });
       const cleaned = cleanAnswer(answer, field);
-      if (cleaned) map[field.ref] = cleaned;
+      if (cleaned) {
+        map[field.ref] = cleaned;
+        if (isOpenEnded(field)) priorOpenEnded.push(clip(cleaned.replace(/\s+/g, " "), 180));
+      }
     } catch (e) {
       lastError = e instanceof Error ? e.message : String(e);
       log.warn(`field "${field.label}" failed`, e);
@@ -89,11 +100,16 @@ export async function mapFieldsWithLlm(
 
 /* -------------------------------- prompts -------------------------------- */
 
-function buildFieldPrompt(profile: string, role: string, field: FieldForLlm): ChatMessage[] {
-  const select = field.options?.length
+function buildFieldPrompt(
+  profile: string,
+  role: string,
+  field: FieldForLlm,
+  priorOpenEnded: string[],
+): ChatMessage[] {
+  const guidance = field.options?.length
     ? `This field is a dropdown. Choose EXACTLY ONE of these options and reply with that option's text only:\nOptions: ${field.options.join(" | ")}`
     : isOpenEnded(field)
-      ? "Write a concise, specific answer in the first person (2-5 sentences). Ground every claim in the candidate's REAL experience and the job posting. Do not invent skills, employers, metrics, or inflate seniority."
+      ? openEndedGuidance(lengthHint(field.label), priorOpenEnded)
       : "Reply with a short, direct value (a few words) taken from the résumé.";
 
   return [
@@ -111,36 +127,63 @@ function buildFieldPrompt(profile: string, role: string, field: FieldForLlm): Ch
       content:
         `CANDIDATE RÉSUMÉ:\n${profile}\n\n` +
         (role ? `${role}\n\n` : "") +
-        `FORM FIELD:\n"${field.label}"\n\n${select}\n\nAnswer:`,
+        `FORM FIELD:\n"${field.label}"\n\n${guidance}\n\nAnswer:`,
     },
   ];
 }
 
+/** Instructions for a prose answer: one deep example, right length, no repeats. */
+function openEndedGuidance(len: LengthHint, prior: string[]): string {
+  const lengthLine = len.maxWords
+    ? `Write ${len.minWords ?? Math.max(50, Math.round(len.maxWords * 0.6))}-${len.maxWords} words — use the space to be thorough and specific.`
+    : len.minWords
+      ? `Write at least ${len.minWords} words — be thorough and specific.`
+      : "Write a substantial answer of about 120-180 words.";
+  const avoid = prior.length
+    ? "\nYou already used these examples in earlier answers — choose a DIFFERENT accomplishment for this question and do not repeat these points:\n" +
+      prior.map((p) => `  - ${p}`).join("\n")
+    : "";
+  return (
+    "Answer in the first person with ONE focused, concrete example from the candidate's REAL experience: " +
+    "pick the single most relevant and impressive accomplishment for THIS specific question. " +
+    "Do NOT blend several unrelated projects into one answer. Go deep on that one example — the situation, " +
+    "what the candidate personally built or decided, the hardest technical part, and the concrete outcome — " +
+    "with specific details (systems, technologies, scale, results) drawn from the résumé. " +
+    lengthLine +
+    avoid
+  );
+}
+
 function buildProfile(resume: ResumeData): string {
-  return [
+  const parts: string[] = [
     resume.fullName && `Name: ${resume.fullName}`,
     resume.headline && `Title: ${resume.headline}`,
     resume.email && `Email: ${resume.email}`,
     resume.phone && `Phone: ${resume.phone}`,
     resume.location && `Location: ${resume.location}`,
     resume.links.length && `Links: ${resume.links.map((l) => `${l.label} ${l.url}`).join(", ")}`,
-    resume.skills.length && `Skills: ${resume.skills.join(", ")}`,
+    resume.skills.length && `Skills: ${resume.skills.slice(0, 40).join(", ")}`,
     resume.summary && `Summary: ${resume.summary}`,
-    experienceLines(resume),
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
+  ].filter(Boolean) as string[];
 
-function experienceLines(resume: ResumeData): string {
-  return resume.experiences
-    .slice(0, 3)
-    .map((e) => {
-      const head = [e.title, e.company].filter(Boolean).join(" at ");
-      const bullets = e.bullets.slice(0, 3).map((b) => `  • ${b}`).join("\n");
-      return bullets ? `Experience: ${head}\n${bullets}` : `Experience: ${head}`;
-    })
-    .join("\n");
+  const exp = resume.experiences.slice(0, 6).map((e) => {
+    const head = [e.title, e.company].filter(Boolean).join(" at ");
+    const dates = [e.startDate, e.endDate].filter(Boolean).join("–");
+    const tech = e.skills.length ? `\n  tech: ${e.skills.slice(0, 15).join(", ")}` : "";
+    const bullets = e.bullets.slice(0, 8).map((b) => `  • ${b}`).join("\n");
+    return `• ${head}${dates ? ` (${dates})` : ""}${tech}${bullets ? `\n${bullets}` : ""}`;
+  });
+  if (exp.length) parts.push(`EXPERIENCE:\n${exp.join("\n")}`);
+
+  // Projects / Achievements / Certifications — often the strongest, most
+  // specific material, and previously omitted from the field-fill prompt.
+  const extras = (resume.extraSections ?? [])
+    .filter((s) => s.heading && s.items.length)
+    .slice(0, 4)
+    .map((s) => `${s.heading.toUpperCase()}:\n${s.items.slice(0, 8).map((i) => `  • ${i}`).join("\n")}`);
+  if (extras.length) parts.push(extras.join("\n"));
+
+  return clip(parts.join("\n"), 6000);
 }
 
 function roleOverview(jd: JdContext): string {
@@ -166,10 +209,43 @@ export function isOpenEnded(field: FieldForLlm): boolean {
   );
 }
 
+export interface LengthHint {
+  minWords?: number;
+  maxWords?: number;
+}
+
+/** Read an explicit word-count requirement out of a field's label, if any. */
+export function lengthHint(label: string): LengthHint {
+  const l = label.toLowerCase();
+  const range = l.match(/(\d{2,4})\s*(?:-|–|—|to|and)\s*(\d{2,4})\s*words/);
+  if (range) return { minWords: Number(range[1]), maxWords: Number(range[2]) };
+  const max =
+    l.match(/(?:up to|no more than|within|max(?:imum)?(?: of)?|under|fewer than|less than)\s*(\d{2,4})\s*words/) ||
+    l.match(/(\d{2,4})\s*words?\s*(?:or fewer|or less|max(?:imum)?)/);
+  if (max) return { maxWords: Number(max[1]) };
+  const min =
+    l.match(/(?:at least|minimum(?: of)?|min)\s*(\d{2,4})\s*words/) ||
+    l.match(/(\d{2,4})\s*\+\s*words/) ||
+    l.match(/(\d{2,4})\s*words?\s*minimum/);
+  if (min) return { minWords: Number(min[1]) };
+  return {};
+}
+
 function maxTokensFor(field: FieldForLlm): number {
   if (field.options?.length) return 24;
-  if (isOpenEnded(field)) return 320;
-  return 48;
+  if (!isOpenEnded(field)) return 48;
+  // ~1.9 tokens/word + buffer, so a "150-300 words" ask isn't cut short.
+  const targetWords = lengthHint(field.label).maxWords ?? 180;
+  return Math.min(900, Math.max(360, Math.round(targetWords * 1.9) + 80));
+}
+
+/** Trim to a max length on a word boundary (no mid-word cut). */
+function clip(text: string, max: number): string {
+  const t = text.trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > max * 0.6 ? cut.slice(0, sp) : cut).trim();
 }
 
 /** Clean a single field's answer; for selects, resolve to a real option. */
@@ -190,7 +266,7 @@ export function cleanAnswer(raw: string, field: FieldForLlm): string {
     return exact ?? partial ?? "";
   }
 
-  const cap = isOpenEnded(field) ? 1500 : 160;
+  const cap = isOpenEnded(field) ? 3000 : 160;
   return t.slice(0, cap).trim();
 }
 
