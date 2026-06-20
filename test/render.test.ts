@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   renderResumeHtml,
   renderResumeMarkdown,
+  markdownToResumeHtml,
   buildResumeDocument,
   sanitizeAccent,
   type RenderInput,
@@ -62,6 +63,32 @@ describe("renderResumeMarkdown", () => {
     const md = renderResumeMarkdown(input);
     expect(md).toContain("# Jane Doe");
     expect(md).toContain("## Experience");
+  });
+});
+
+describe("markdownToResumeHtml", () => {
+  it("renders headings, bullets and inline formatting from Markdown", () => {
+    const html = markdownToResumeHtml(renderResumeMarkdown(input));
+    expect(html).toContain('<h1 class="r-name">Jane Doe</h1>');
+    expect(html).toContain('<div class="r-headline">Software Engineer</div>');
+    expect(html).toContain("<h2>Experience</h2>");
+    expect(html).toContain('<div class="r-exp-head">Engineer — Acme</div>');
+    expect(html).toContain('<div class="r-exp-meta">2021 – Now</div>');
+    expect(html).toContain("<li>Shipped a React app</li>");
+    expect(html).toContain('<a href="https://github.com/jane">GitHub</a>');
+  });
+
+  it("reflects edits to the Markdown (the PDF tracks the latest text)", () => {
+    const edited = renderResumeMarkdown(input).replace("Shipped a React app", "Shipped a Vue app");
+    const html = markdownToResumeHtml(edited);
+    expect(html).toContain("<li>Shipped a Vue app</li>");
+    expect(html).not.toContain("Shipped a React app");
+  });
+
+  it("escapes HTML to prevent markup injection", () => {
+    const html = markdownToResumeHtml("# <script>alert(1)</script>\n\n- safe");
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
   });
 });
 
