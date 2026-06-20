@@ -17,7 +17,7 @@ import { resetEngineCache, tailorResume } from "../resume/tailor.js";
 import { parseResumeText } from "../resume/parse-resume.js";
 import { parseResumeWithLlm, mergeParsed, applyParsedToResume } from "../resume/parse-resume-llm.js";
 import { generateCoverLetter } from "../resume/cover-letter.js";
-import { buildResumeDocument } from "../resume/render.js";
+import { buildResumeDocument, markdownToResumeHtml } from "../resume/render.js";
 import {
   addApplication,
   deleteApplication,
@@ -739,6 +739,60 @@ function renderStudio(): HTMLElement {
       results,
     ),
     coverLetterCard(jdInput as HTMLTextAreaElement),
+    byoMarkdownCard(),
+  );
+}
+
+/**
+ * "Bring your own Markdown": paste a résumé written elsewhere (e.g. by another
+ * LLM) and export it through the same ATS-friendly PDF pipeline. Nothing leaves
+ * the machine — it's the same on-device render used for tailored résumés.
+ */
+function byoMarkdownCard(): HTMLElement {
+  const ta = h("textarea", {
+    rows: 16,
+    class: "mono",
+    placeholder:
+      "# Your Name\n**Headline**\n\nemail · phone · location\n[GitHub](https://github.com/you)\n\n## Summary\n\nA short paragraph.\n\n## Key Skills\n\nReact · Node.js · TypeScript\n\n## Experience\n\n### Title — Company\n*2021 – Now · Remote*\n\n- Did a thing\n- Did another thing\n\n## Education\n\n- BS, University (2020)",
+  }) as HTMLTextAreaElement;
+  const accent = h("input", { type: "color", value: deriveAccent("") });
+  const status = h("span", { class: "flash" });
+
+  return card(
+    "Markdown → PDF (bring your own)",
+    h("div", {
+      class: "note info small",
+      text: "Paste a résumé written anywhere — ChatGPT, Claude, or by hand — and export the same single-column, selectable-text PDF used for tailored résumés. Use the headings below for the cleanest layout (# name, ## section, ### role, - bullets). Everything renders on-device; nothing is uploaded.",
+    }),
+    h("div", { class: "field", style: { marginTop: "12px" } }, h("label", { text: "Your résumé (Markdown)" }), ta),
+    h(
+      "div",
+      { class: "toolbar" },
+      h("button", {
+        class: "action",
+        text: "Save as PDF (ATS-friendly)",
+        onclick: () => {
+          if (!ta.value.trim()) {
+            flash(status, "Paste your Markdown résumé first.", "err");
+            return;
+          }
+          savePdf(ta.value, (accent as HTMLInputElement).value, status);
+        },
+      }),
+      h("label", { class: "small muted" }, "Accent ", accent),
+      h("button", {
+        class: "secondary",
+        text: "Download .md",
+        onclick: () => {
+          if (!ta.value.trim()) {
+            flash(status, "Paste your Markdown résumé first.", "err");
+            return;
+          }
+          download(`resume-${Date.now()}.md`, ta.value, "text/markdown");
+        },
+      }),
+      status,
+    ),
   );
 }
 
@@ -871,7 +925,7 @@ function renderTailorResult(container: HTMLElement, t: TailoredResume): void {
       h("button", {
         class: "action",
         text: "Save as PDF (ATS-friendly)",
-        onclick: () => savePdf(t, accent.value, exportStatus),
+        onclick: () => savePdf(output.value, accent.value, exportStatus),
       }),
       h("label", { class: "small muted" }, "Accent ", accent),
       h("button", {
@@ -910,12 +964,17 @@ function renderTailorResult(container: HTMLElement, t: TailoredResume): void {
   );
 }
 
-function savePdf(t: TailoredResume, accentColor: string, status: HTMLElement): void {
+function savePdf(markdown: string, accentColor: string, status: HTMLElement): void {
+  // Render from the current (possibly edited) Markdown, not a stale snapshot,
+  // and take the name from the Markdown's title so the filename matches edits.
+  const nameFromMd = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim();
   const name =
+    nameFromMd ||
     settings.resume.fullName ||
     parseResumeText(settings.resume.baseResumeText).fullName ||
     "Resume";
-  const doc = buildResumeDocument(t.html, { title: `${name} - Resume`, accent: accentColor });
+  const body = markdownToResumeHtml(markdown);
+  const doc = buildResumeDocument(body, { title: `${name} - Resume`, accent: accentColor });
   const w = window.open("", "_blank", "width=840,height=1080");
   if (!w) {
     flash(status, "Allow pop-ups for this page, then try again.", "err");

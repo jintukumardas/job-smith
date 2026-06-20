@@ -146,6 +146,106 @@ function htmlSection(title: string, body: string): string {
   return `<section class="r-section"><h2>${escapeHtml(title)}</h2>${body}</section>`;
 }
 
+/**
+ * Convert the (user-editable) tailored Markdown back into the same ATS-friendly
+ * HTML body that {@link renderResumeHtml} produces, so the PDF reflects the
+ * latest edits rather than a snapshot taken at tailor time. Tolerant of
+ * free-form edits and escapes all text to prevent markup injection.
+ */
+export function markdownToResumeHtml(markdown: string): string {
+  const e = escapeHtml;
+  // Escape first, then re-introduce a small, safe inline subset.
+  const inline = (s: string): string =>
+    e(s)
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text, url) => `<a href="${url}">${text}</a>`)
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*([^*]+)\*/g, "<em>$1</em>");
+
+  const out: string[] = [];
+  let inHeader = false;
+  let inSection = false;
+  let inExp = false;
+  let inList = false;
+
+  const closeList = (): void => {
+    if (inList) out.push("</ul>");
+    inList = false;
+  };
+  const closeExp = (): void => {
+    closeList();
+    if (inExp) out.push("</div>");
+    inExp = false;
+  };
+  const closeSection = (): void => {
+    closeExp();
+    if (inSection) out.push("</section>");
+    inSection = false;
+  };
+  const closeHeader = (): void => {
+    if (inHeader) out.push("</header>");
+    inHeader = false;
+  };
+
+  for (const raw of markdown.replace(/\r\n/g, "\n").split("\n")) {
+    const t = raw.trim();
+    if (!t) {
+      closeList();
+      continue;
+    }
+
+    if (t.startsWith("### ")) {
+      closeExp();
+      out.push(`<div class="r-exp"><div class="r-exp-head">${inline(t.slice(4))}</div>`);
+      inExp = true;
+      continue;
+    }
+    if (t.startsWith("## ")) {
+      closeSection();
+      closeHeader();
+      out.push(`<section class="r-section"><h2>${inline(t.slice(3))}</h2>`);
+      inSection = true;
+      continue;
+    }
+    if (t.startsWith("# ")) {
+      closeSection();
+      if (!inHeader) {
+        out.push('<header class="r-head">');
+        inHeader = true;
+      }
+      out.push(`<h1 class="r-name">${inline(t.slice(2))}</h1>`);
+      continue;
+    }
+    if (t.startsWith("- ") || t.startsWith("* ")) {
+      if (!inList) {
+        out.push("<ul>");
+        inList = true;
+      }
+      out.push(`<li>${inline(t.slice(2))}</li>`);
+      continue;
+    }
+
+    closeList();
+
+    // A whole-line italic under an experience is the date/location meta line.
+    if (inExp && /^\*[^*].*\*$/.test(t)) {
+      out.push(`<div class="r-exp-meta">${inline(t.slice(1, -1))}</div>`);
+      continue;
+    }
+    // Header sub-lines (headline / contact / links) precede the first section.
+    if (inHeader && !inSection) {
+      if (/^\*\*.+\*\*$/.test(t)) out.push(`<div class="r-headline">${inline(t.slice(2, -2))}</div>`);
+      else if (t.includes("](")) out.push(`<div class="r-links">${inline(t)}</div>`);
+      else out.push(`<div class="r-contact">${inline(t)}</div>`);
+      continue;
+    }
+    out.push(`<p class="r-summary">${inline(t)}</p>`);
+  }
+
+  closeSection();
+  closeHeader();
+  return out.join("\n");
+}
+
 /** Validate a CSS hex color, falling back to a professional navy. */
 export function sanitizeAccent(color: string): string {
   return /^#[0-9a-fA-F]{3,8}$/.test(color.trim()) ? color.trim() : "#1f3a8a";
