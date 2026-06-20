@@ -29,6 +29,8 @@ export async function mapFieldsWithLlm(
   temperature: number,
   jd?: JdContext,
   onProgress?: (p: MapProgress) => void,
+  /** Called as each field is answered, so a driver can apply it immediately. */
+  onField?: (ref: string, value: string) => void,
 ): Promise<MapFieldsResponse> {
   if (fields.length === 0) return { map: {}, engine: "none", note: "no fields" };
 
@@ -83,6 +85,7 @@ export async function mapFieldsWithLlm(
       const cleaned = cleanAnswer(answer, field);
       if (cleaned) {
         map[field.ref] = cleaned;
+        onField?.(field.ref, cleaned); // stream it out so it lands on the page now
         if (isOpenEnded(field)) priorOpenEnded.push(clip(cleaned.replace(/\s+/g, " "), 180));
       }
     } catch (e) {

@@ -11,7 +11,6 @@ import { getJobsCache, getSettings } from "../lib/storage.js";
 import {
   onMapProgress,
   sendToBackground,
-  sendToOffscreen,
   type FieldForLlm,
   type JdContext,
 } from "../lib/messaging.js";
@@ -48,8 +47,6 @@ const FILL_FN = (payload: FillPayload): FillResult | null =>
   window.__jobsmith ? window.__jobsmith.fill(payload) : null;
 const COLLECT_FN = (fields: AutofillField[]): CollectedField[] =>
   window.__jobsmith ? window.__jobsmith.collect(fields) : [];
-const APPLY_FN = (payload: { map: Record<string, string>; highlight: boolean }): number =>
-  window.__jobsmith ? window.__jobsmith.applyMap(payload) : 0;
 const CAPTURE_FN = (): CapturedJd | null =>
   window.__jobsmith ? window.__jobsmith.captureJd() : null;
 const CLEAR_FN = (): void => {
@@ -175,16 +172,6 @@ async function execAllFrames<A extends unknown[], R>(
   return res.map((r) => ({ frameId: r.frameId ?? 0, result: r.result as R | undefined }));
 }
 
-async function execFrame<A extends unknown[], R>(
-  tabId: number,
-  frameId: number,
-  func: (...args: A) => R,
-  args: A,
-): Promise<R | undefined> {
-  const res = await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, func, args });
-  return res[0]?.result as R | undefined;
-}
-
 /* ------------------------------ page actions ----------------------------- */
 
 interface Gate {
@@ -245,10 +232,6 @@ function hasFillValues(fields: AutofillField[]): boolean {
   return fields.some((f) => f.enabled && f.value.trim().length > 0);
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 async function doSmartFill(): Promise<void> {
   const gate = await gateAutofill();
   if (!gate) return;
@@ -293,81 +276,45 @@ async function doSmartFill(): Promise<void> {
     return;
   }
 
-  setStatus(gate.status, `Filled ${deterministic}. Starting on-device AI for ${llmFields.length} more…`, "info");
-
-  // 4) run the on-device model in the offscreen document (survives nothing if the
-  //    popup closes, so tell the user to keep it open during the one-time download).
-  const offErr = await ensureOffscreen();
-  if (offErr) {
-    setStatus(gate.status, `Filled ${deterministic}. AI unavailable: ${offErr}`, "err");
-    return;
-  }
-
-  // Live progress so a multi-GB first-run download never looks frozen.
+  // 4) hand the slow on-device step to the service worker. It runs the model in
+  //    the offscreen document and applies each answer to the page as it's
+  //    produced — so answers land one by one AND the job keeps going even if the
+  //    user closes this popup. While open, we mirror its live progress.
   const stopProgress = onMapProgress((p) => {
     if (p.phase === "loading-model") {
       const pct = typeof p.progress === "number" ? ` ${Math.round(p.progress * 100)}%` : "";
-      setStatus(gate.status, `Downloading on-device AI model${pct} — first run only, keep this popup open…`, "info");
+      setStatus(gate.status, `Downloading on-device AI model${pct} — first run only…`, "info");
     } else {
-      // Per-field progress, e.g. "Answering 2 of 4: Why are you interested…".
-      setStatus(gate.status, p.message || `Filling ${llmFields.length} field(s) with on-device AI…`, "info");
+      // Per-field / per-fill progress streamed from the background.
+      setStatus(
+        gate.status,
+        p.message || `Filling ${llmFields.length} field(s) with on-device AI…`,
+        p.done ? "ok" : "info",
+      );
     }
+    if (p.done) stopProgress();
   });
 
-  try {
-    const req = {
-      target: "offscreen" as const,
-      type: "MAP_FIELDS" as const,
-      fields: llmFields,
-      resume: s.resume,
-      model: s.llm.model,
-      temperature: s.llm.temperature,
-      ...(jd ? { jd } : {}),
-    };
-    let resp = await sendToOffscreen(req);
-    // The offscreen listener may not be ready on the very first creation; retry once.
-    if (resp.error && /establish connection|receiving end|port closed/i.test(resp.error)) {
-      await delay(500);
-      resp = await sendToOffscreen(req);
-    }
-    if (resp.engine === "none") {
-      const why = resp.error || resp.note || "unknown";
-      log.warn(`smart fill: AI unavailable — ${why}`);
-      const hint = /webgpu/i.test(why)
-        ? "Smart Fill needs WebGPU (Chrome 120+ on a supported GPU). Autofill form still works for standard fields."
-        : `AI mapping unavailable (${why}).`;
-      setStatus(gate.status, `Filled ${deterministic} field(s). ${hint}`, "err");
-      return;
-    }
-
-    // 5) group the ref->value map by frame and apply it back into the page.
-    const byFrame = new Map<number, Record<string, string>>();
-    for (const [globalRef, value] of Object.entries(resp.map)) {
-      const idx = globalRef.indexOf(":");
-      if (idx < 0) continue;
-      const frameId = Number(globalRef.slice(0, idx));
-      const localRef = globalRef.slice(idx + 1);
-      const m = byFrame.get(frameId) ?? {};
-      m[localRef] = value;
-      byFrame.set(frameId, m);
-    }
-
-    let aiFilled = 0;
-    for (const [frameId, map] of byFrame) {
-      const n = await execFrame(tab.id!, frameId, APPLY_FN, [
-        { map, highlight: s.autofill.highlightFilled },
-      ]);
-      aiFilled += n ?? 0;
-    }
-
-    setStatus(
-      gate.status,
-      `Filled ${deterministic} known + ${aiFilled} AI field(s). Review everything before you submit.`,
-      "ok",
-    );
-  } finally {
+  const resp = await sendToBackground({
+    type: "SMART_FILL",
+    tabId: tab.id!,
+    fields: llmFields,
+    highlight: s.autofill.highlightFilled,
+    ...(jd ? { jd } : {}),
+  });
+  if (resp.type === "ERROR") {
     stopProgress();
+    const hint = /webgpu/i.test(resp.error)
+      ? "Smart Fill needs WebGPU (Chrome 120+ on a supported GPU). Autofill still works for standard fields."
+      : resp.error;
+    setStatus(gate.status, `Filled ${deterministic} field(s). ${hint}`, "err");
+    return;
   }
+  setStatus(
+    gate.status,
+    `Filled ${deterministic} known. AI is filling ${llmFields.length} more — answers appear as they're written. You can close this popup.`,
+    "info",
+  );
 }
 
 /** Turn a captured JD into the trimmed context we send to the model (or null). */
@@ -379,27 +326,6 @@ function toJdContext(jd: CapturedJd | null): JdContext | null {
   if (jd.title) ctx.title = jd.title;
   if (jd.company) ctx.company = jd.company;
   return ctx;
-}
-
-/** Ensure the offscreen document exists. Returns null on success, else a reason. */
-async function ensureOffscreen(): Promise<string | null> {
-  try {
-    if (!chrome.offscreen || typeof chrome.offscreen.createDocument !== "function") {
-      return "offscreen API unavailable — reload the extension at chrome://extensions";
-    }
-    if (await chrome.offscreen.hasDocument()) return null;
-    await chrome.offscreen.createDocument({
-      url: "offscreen.html",
-      reasons: ["WORKERS" as chrome.offscreen.Reason],
-      justification: "Run the on-device LLM to map application form fields to your resume locally.",
-    });
-    return null;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (/single offscreen|already/i.test(msg)) return null; // created concurrently
-    log.warn("offscreen create failed", msg);
-    return msg;
-  }
 }
 
 async function doCaptureTailor(): Promise<void> {
