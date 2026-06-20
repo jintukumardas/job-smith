@@ -309,7 +309,8 @@ async function doSmartFill(): Promise<void> {
       const pct = typeof p.progress === "number" ? ` ${Math.round(p.progress * 100)}%` : "";
       setStatus(gate.status, `Downloading on-device AI model${pct} — first run only, keep this popup open…`, "info");
     } else {
-      setStatus(gate.status, `Reading the page and filling ${llmFields.length} field(s)…`, "info");
+      // Per-field progress, e.g. "Answering 2 of 4: Why are you interested…".
+      setStatus(gate.status, p.message || `Filling ${llmFields.length} field(s) with on-device AI…`, "info");
     }
   });
 
