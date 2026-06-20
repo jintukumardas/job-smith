@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isOpenEnded, cleanAnswer } from "../src/autofill/llm-map.js";
+import { isOpenEnded, cleanAnswer, lengthHint } from "../src/autofill/llm-map.js";
 import type { FieldForLlm } from "../src/lib/messaging.js";
 
 const f = (over: Partial<FieldForLlm>): FieldForLlm => ({ ref: "0:f0", label: "", type: "text", ...over });
@@ -42,5 +42,26 @@ describe("cleanAnswer", () => {
   it("caps short-field answers", () => {
     const long = "x".repeat(500);
     expect(cleanAnswer(long, f({ label: "City" })).length).toBe(160);
+  });
+});
+
+describe("lengthHint", () => {
+  it("reads a word range", () => {
+    expect(lengthHint("Why do you want to work here? Typically 150-300 words.")).toEqual({
+      minWords: 150,
+      maxWords: 300,
+    });
+    expect(lengthHint("Answer in between 100 and 250 words")).toEqual({ minWords: 100, maxWords: 250 });
+  });
+  it("reads a maximum", () => {
+    expect(lengthHint("Keep your answer to 250 words or fewer.")).toEqual({ maxWords: 250 });
+    expect(lengthHint("Please write up to 500 words")).toEqual({ maxWords: 500 });
+  });
+  it("reads a minimum", () => {
+    expect(lengthHint("Write at least 100 words")).toEqual({ minWords: 100 });
+    expect(lengthHint("200+ words please")).toEqual({ minWords: 200 });
+  });
+  it("returns empty when there is no word-count hint", () => {
+    expect(lengthHint("Tell us about yourself")).toEqual({});
   });
 });

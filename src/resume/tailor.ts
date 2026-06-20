@@ -6,7 +6,7 @@
  * A warm WebLLM engine is cached per-model so repeated tailoring in one page
  * session does not reload the model.
  */
-import type { ResumeData, Settings, TailoredResume } from "../types/index.js";
+import type { ResumeData, ResumeExperience, Settings, TailoredResume } from "../types/index.js";
 import type { EngineProgress, EngineTailorResult, ResumeEngine, TailorRequest } from "./engine.js";
 import { extractJd } from "./jd-parser.js";
 import { enrichResume } from "./parse-resume.js";
@@ -187,13 +187,19 @@ function assemble(
     notes.push("Adjusted the summary to avoid claiming skills not in your resume.");
   }
 
-  const experiences: RenderedExperience[] = content.experiences.map((exp) => ({
+  // Small models often compress a role down to 1-2 bullets or drop a role
+  // entirely. Restore depth deterministically: keep the model's rephrased
+  // bullets, append any real source bullets it didn't cover, and re-add any
+  // whole role it omitted — so a tailored résumé never loses real experience.
+  const fullExperiences = backfillExperiences(content.experiences, resume.experiences);
+  const experiences: RenderedExperience[] = fullExperiences.map((exp) => ({
     exp,
     bullets: exp.bullets,
   }));
 
   const renderResume: ResumeData = {
     ...content,
+    experiences: fullExperiences,
     skills: orderedSkills,
     baseResumeText: "",
   };
@@ -218,6 +224,70 @@ function assemble(
     summary,
     notes: [...notes, ...extraNotes],
   };
+}
+
+/* --------------------- bullet / role backfill (depth) -------------------- */
+
+/** Token-set Jaccard similarity in [0,1]; 0 when either side is empty. */
+function jaccard(a: string[], b: string[]): number {
+  const sa = new Set(a);
+  const sb = new Set(b);
+  if (sa.size === 0 || sb.size === 0) return 0;
+  let inter = 0;
+  for (const x of sa) if (sb.has(x)) inter++;
+  return inter / (sa.size + sb.size - inter);
+}
+
+/** Index of the best-matching unused source role (by company + title), or -1. */
+function matchSourceIndex(exp: ResumeExperience, source: ResumeExperience[], used: Set<number>): number {
+  const key = tokenize(`${exp.company} ${exp.title}`);
+  let best = -1;
+  let bestScore = 0;
+  source.forEach((s, i) => {
+    if (used.has(i)) return;
+    const score = jaccard(key, tokenize(`${s.company} ${s.title}`));
+    if (score > bestScore) {
+      bestScore = score;
+      best = i;
+    }
+  });
+  return bestScore >= 0.34 ? best : -1;
+}
+
+/** Keep the model's bullets, then append source bullets it didn't cover. */
+function mergeBullets(llmBullets: string[], sourceBullets: string[], cap = 10): string[] {
+  const out = llmBullets.map((b) => b.trim()).filter(Boolean);
+  const tokenSets = out.map((b) => tokenize(b));
+  for (const sb of sourceBullets) {
+    if (out.length >= cap) break;
+    const st = tokenize(sb);
+    if (tokenSets.some((t) => jaccard(t, st) >= 0.5)) continue; // already represented
+    out.push(sb.trim());
+    tokenSets.push(st);
+  }
+  return out;
+}
+
+/**
+ * Reconcile the model's experiences with the real source résumé so no real
+ * bullet or role is lost. Matched roles keep the model's rephrased bullets plus
+ * any uncovered source bullets; roles the model dropped are appended verbatim.
+ */
+export function backfillExperiences(
+  llm: ResumeExperience[],
+  source: ResumeExperience[],
+): ResumeExperience[] {
+  const used = new Set<number>();
+  const merged = llm.map((exp) => {
+    const idx = matchSourceIndex(exp, source, used);
+    if (idx < 0) return exp;
+    used.add(idx);
+    return { ...exp, bullets: mergeBullets(exp.bullets, source[idx].bullets) };
+  });
+  source.forEach((src, i) => {
+    if (!used.has(i)) merged.push(src);
+  });
+  return merged;
 }
 
 export function computeMatchScore(
