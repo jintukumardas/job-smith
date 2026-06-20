@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectSkills, normalizeSkill, sameSkill } from "../src/resume/skills.js";
+import { curateSkills, detectSkills, normalizeSkill, sameSkill } from "../src/resume/skills.js";
 
 describe("detectSkills", () => {
   it("detects skills with aliases and punctuation", () => {
@@ -49,5 +49,29 @@ describe("normalizeSkill / sameSkill", () => {
   it("compares skills by canonical form", () => {
     expect(sameSkill("k8s", "Kubernetes")).toBe(true);
     expect(sameSkill("React", "Vue")).toBe(false);
+  });
+});
+
+describe("curateSkills (collapse overlapping skills, cap)", () => {
+  it("collapses C / C++ / C/C++ into a single entry", () => {
+    expect(curateSkills(["C/C++", "C++", "C"])).toEqual(["C/C++"]);
+  });
+  it("prefers atomic skills over an awkward compound", () => {
+    const out = curateSkills([
+      "High Availability & Latency Optimization",
+      "High Availability",
+      "Latency Optimization",
+    ]);
+    expect(out).toEqual(["High Availability", "Latency Optimization"]);
+  });
+  it("dedupes LLM Orchestration variants", () => {
+    const out = curateSkills(["AI / LLM Orchestration", "LLM Orchestration", "LLM Orchestration"]);
+    expect(out).toEqual(["LLM Orchestration"]);
+  });
+  it("keeps distinct skills and preserves order", () => {
+    expect(curateSkills(["Go", "Python", "Rust"])).toEqual(["Go", "Python", "Rust"]);
+  });
+  it("caps the list length", () => {
+    expect(curateSkills(["Go", "Python", "Rust", "Java", "Kotlin"], 3)).toHaveLength(3);
   });
 });

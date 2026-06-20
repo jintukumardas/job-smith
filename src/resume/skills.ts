@@ -168,6 +168,60 @@ export function normalizeSkill(skill: string): string {
   return ALIAS_TO_CANONICAL.get(key) ?? skill.trim();
 }
 
+const SKILL_STOP = new Set([
+  "and", "or", "the", "of", "with", "for", "to", "in", "on", "a", "an", "using", "based", "via", "amp",
+]);
+
+/** Significant lowercase tokens of a skill label ("C++"→{c}, "C#"→{c#}). */
+function skillTokens(s: string): Set<string> {
+  return new Set(s.toLowerCase().split(/[^a-z0-9#]+/).filter((t) => t && !SKILL_STOP.has(t)));
+}
+
+function isSubset(a: Set<string>, b: Set<string>): boolean {
+  if (a.size === 0) return false;
+  for (const x of a) if (!b.has(x)) return false;
+  return true;
+}
+
+/**
+ * Collapse near-duplicate / overlapping skills into one per cluster — preferring
+ * the more atomic label — and cap the list, so the skills section reads like a
+ * curated set instead of a keyword dump. Relevance order is preserved.
+ *
+ * e.g. ["C/C++", "C++", "C"] -> ["C/C++"], and
+ *      ["High Availability & Latency Optimization", "High Availability", "Latency Optimization"]
+ *      -> ["High Availability", "Latency Optimization"].
+ */
+export function curateSkills(skills: string[], cap = 20): string[] {
+  const kept: { label: string; tokens: Set<string> }[] = [];
+  for (const raw of skills) {
+    const label = raw.trim();
+    if (!label) continue;
+    const tokens = skillTokens(label);
+    if (tokens.size === 0) {
+      if (!kept.some((k) => k.label.toLowerCase() === label.toLowerCase())) kept.push({ label, tokens });
+      continue;
+    }
+    const idx = kept.findIndex((k) => isSubset(tokens, k.tokens) || isSubset(k.tokens, tokens));
+    if (idx < 0) {
+      kept.push({ label, tokens });
+    } else if (tokens.size < kept[idx].tokens.size && label.length >= 3) {
+      kept[idx] = { label, tokens }; // the new label is more atomic — prefer it, in place
+    }
+  }
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const k of kept) {
+    const key = k.label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(k.label);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
 /** True if two skill strings refer to the same canonical skill. */
 export function sameSkill(a: string, b: string): boolean {
   return normalizeSkill(a).toLowerCase() === normalizeSkill(b).toLowerCase();

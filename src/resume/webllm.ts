@@ -25,7 +25,7 @@ interface Pending {
   idleMs?: number;
 }
 
-const RESUME_MAX_TOKENS = 2048;
+const RESUME_MAX_TOKENS = 3072; // headroom so longer résumés keep all their bullets
 // Both download (init) and generation (chat) use IDLE timeouts reset by progress
 // or token events, so a slow-but-advancing operation is never killed — only a
 // truly stalled one (no token for this long) is given up on.
@@ -248,11 +248,14 @@ function buildResumePrompt(source: string, req: TailorRequest): ChatMessage[] {
       content:
         "You are an expert resume writer. Rewrite the candidate's resume tailored to the TARGET JOB. " +
         "STRICT RULES: use ONLY facts found in the SOURCE RESUME — never invent companies, titles, dates, " +
-        "degrees, numbers/metrics, or skills. You may rephrase bullets and reorder/select content to " +
-        "emphasize what matches the job, but every fact must come from the source. Do NOT add skills the " +
-        "candidate does not have. Include the candidate's FULL skill list and ALL relevant sections from the " +
-        "source (achievements, projects, certifications, etc.) under \"sections\". Reply with ONLY a JSON object " +
-        "in exactly this shape — no markdown, no code fences, no commentary:\n" +
+        "degrees, numbers/metrics, or skills, and never inflate seniority. You may rephrase bullets and " +
+        "REORDER them to emphasize what matches the job, but KEEP EVERY ROLE and EVERY substantive bullet " +
+        "point — do not omit or over-summarize experience (a role should keep all its bullets, rephrased). " +
+        "Do NOT add skills the candidate does not have. For \"skills\", return the candidate's real skills " +
+        "MOST-RELEVANT FIRST, deduplicated (no near-duplicates like 'C', 'C++' and 'C/C++' together). " +
+        "Include ALL relevant extra sections from the source (achievements, projects, certifications, etc.) " +
+        "under \"sections\". Reply with ONLY a JSON object in exactly this shape — no markdown, no code " +
+        "fences, no commentary:\n" +
         RESUME_SCHEMA,
     },
     {

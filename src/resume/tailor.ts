@@ -10,7 +10,7 @@ import type { ResumeData, Settings, TailoredResume } from "../types/index.js";
 import type { EngineProgress, EngineTailorResult, ResumeEngine, TailorRequest } from "./engine.js";
 import { extractJd } from "./jd-parser.js";
 import { enrichResume } from "./parse-resume.js";
-import { detectSkills, normalizeSkill, sameSkill } from "./skills.js";
+import { curateSkills, detectSkills, normalizeSkill, sameSkill } from "./skills.js";
 import { DeterministicEngine, composeSummary } from "./deterministic.js";
 import { WebLLMEngine } from "./webllm.js";
 import { renderResumeMarkdown, renderResumeHtml, type RenderedExperience } from "./render.js";
@@ -174,7 +174,9 @@ function assemble(
 
   const llmSkills = content.skills.filter((s) => isTruthful(s) && !isGap(s));
   const ownSkills = resume.skills.filter((s) => !isGap(s));
-  const orderedSkills = uniqCi([...matched, ...llmSkills, ...ownSkills]).slice(0, 40);
+  // Relevance order (JD-matched first), then collapse overlapping/duplicate skills
+  // into one curated, capped list — not a 40-item keyword dump.
+  const orderedSkills = curateSkills(uniqCi([...matched, ...llmSkills, ...ownSkills]), 20);
 
   // Anti-fabrication: if the summary claims a skill the candidate lacks, replace
   // it with a truthful, deterministic summary.
