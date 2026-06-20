@@ -31,7 +31,22 @@ export type BgRequest =
   | { type: "GET_STATUS" }
   | { type: "RESCHEDULE" }
   | { type: "TEST_NOTIFICATION" }
-  | { type: "SYNC_REMINDERS" };
+  | { type: "SYNC_REMINDERS" }
+  // Hand the slow on-device Smart Fill off to the service worker so it keeps
+  // running — and keeps applying answers to the page — after the popup closes.
+  | { type: "SMART_FILL"; tabId: number; fields: FieldForLlm[]; jd?: JdContext; highlight: boolean };
+
+/** Port (offscreen -> service worker) that streams each answer as it's produced
+ *  and, while connected, keeps the service worker alive for the whole job. */
+export const SMART_FILL_PORT = "smartfill-stream";
+
+/** Messages sent over {@link SMART_FILL_PORT}. */
+export type SmartFillStream =
+  | { type: "FIELD"; ref: string; value: string }
+  // Heartbeat during a long single-field generation, so SW idle-timer keepalive
+  // never lapses between answers. The receiver just ignores it.
+  | { type: "PING" }
+  | { type: "DONE"; engine: "webllm" | "none"; note?: string; error?: string };
 
 export type BgResponse =
   | { type: "POLL_RESULT"; ok: boolean; newCount: number; total: number; error?: string }
@@ -93,6 +108,8 @@ export interface MapProgress {
   /** 0..1 when known (model download), omitted otherwise. */
   progress?: number;
   message: string;
+  /** Set on the terminal ping so the popup can show a settled "done" state. */
+  done?: boolean;
 }
 
 export function sendMapProgress(p: MapProgress): void {

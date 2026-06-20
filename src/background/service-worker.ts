@@ -6,8 +6,11 @@
  *  - Notify about new matches and due follow-ups (respecting the kill switch
  *    and quiet hours).
  *  - Route messages from the popup/options pages.
+ *  - Drive the on-device Smart Fill once the popup hands it off, so the job
+ *    keeps running and applying answers after the popup closes (user-initiated;
+ *    it only fills fields the user asked for and never auto-submits).
  *
- * It performs NO active behavior on web pages and never auto-submits anything.
+ * It never initiates page actions on its own and never auto-submits anything.
  */
 import { clamp } from "../lib/util.js";
 import { createLogger } from "../lib/logger.js";
@@ -24,7 +27,16 @@ import {
   setProviderState,
   setRemindedFollowUps,
 } from "../lib/storage.js";
-import { onBackgroundMessage, type BgResponse } from "../lib/messaging.js";
+import {
+  onBackgroundMessage,
+  sendMapProgress,
+  sendToOffscreen,
+  SMART_FILL_PORT,
+  type BgRequest,
+  type BgResponse,
+  type SmartFillStream,
+} from "../lib/messaging.js";
+import type { ResumeData } from "../types/index.js";
 import { pollJobs } from "../jobs/aggregator.js";
 import { dueFollowUps, followUpKey } from "../tracker/store.js";
 import {
@@ -93,6 +105,10 @@ onBackgroundMessage(async (req): Promise<BgResponse> => {
       notifyTest();
       return { type: "OK" };
     }
+    case "SMART_FILL": {
+      const err = await startSmartFill(req);
+      return err ? { type: "ERROR", error: err } : { type: "OK" };
+    }
     case "GET_STATUS": {
       const [providerState, cached] = await Promise.all([getProviderState(), getJobsCache()]);
       const lastPollAt = Object.values(providerState).reduce(
@@ -110,6 +126,155 @@ onBackgroundMessage(async (req): Promise<BgResponse> => {
       return { type: "ERROR", error: "unknown request" };
   }
 });
+
+/* ------------------------------- smart fill ------------------------------ */
+// The popup gathers the page fields (it has chrome.scripting) then hands the
+// slow on-device step to us. We run the offscreen model, and as each answer
+// streams back over SMART_FILL_PORT we apply it to the tab right away — so
+// answers land incrementally and the whole job survives the popup closing.
+
+interface SmartFillJob {
+  tabId: number;
+  highlight: boolean;
+  total: number;
+  filled: number;
+  /** Global refs already written, so the stream and the safety net don't double-count. */
+  applied: Set<string>;
+}
+
+let activeSmartFill: SmartFillJob | null = null;
+
+// Injected into the page (must be self-contained): write one ref->value map via
+// the content API. Mirrors APPLY_FN in the popup.
+const APPLY_FN = (payload: { map: Record<string, string>; highlight: boolean }): number =>
+  window.__jobsmith ? window.__jobsmith.applyMap(payload) : 0;
+
+/** Apply one answer to its frame; tolerant of a closed/navigated tab or missing content. */
+async function applyField(job: SmartFillJob, globalRef: string, value: string): Promise<void> {
+  if (job.applied.has(globalRef)) return; // already on the page
+  const idx = globalRef.indexOf(":");
+  if (idx < 0) return;
+  const frameId = Number(globalRef.slice(0, idx));
+  const localRef = globalRef.slice(idx + 1);
+  try {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId: job.tabId, frameIds: [frameId] },
+      func: APPLY_FN,
+      args: [{ map: { [localRef]: value }, highlight: job.highlight }],
+    });
+    const n = (res[0]?.result as number | undefined) ?? 0;
+    if (n > 0) {
+      job.applied.add(globalRef);
+      job.filled += n;
+      sendMapProgress({
+        type: "MAP_PROGRESS",
+        phase: "generating",
+        message: `Filled ${job.filled} of ${job.total} AI field(s)…`,
+      });
+    }
+  } catch (e) {
+    log.debug("smart fill apply failed (tab closed/navigated?)", e);
+  }
+}
+
+// Stream of answers from the offscreen model. While this port is connected the
+// SW is kept alive, so a multi-minute fill is never torn down mid-job.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== SMART_FILL_PORT) return;
+  port.onMessage.addListener((msg: SmartFillStream) => {
+    if (msg.type === "FIELD" && activeSmartFill) void applyField(activeSmartFill, msg.ref, msg.value);
+  });
+});
+
+async function ensureOffscreen(): Promise<string | null> {
+  try {
+    if (!chrome.offscreen || typeof chrome.offscreen.createDocument !== "function") {
+      return "offscreen API unavailable — reload the extension at chrome://extensions";
+    }
+    if (await chrome.offscreen.hasDocument()) return null;
+    await chrome.offscreen.createDocument({
+      url: "offscreen.html",
+      reasons: ["WORKERS" as chrome.offscreen.Reason],
+      justification: "Run the on-device LLM to map application form fields to your resume locally.",
+    });
+    return null;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/single offscreen|already/i.test(msg)) return null; // created concurrently
+    log.warn("offscreen create failed", msg);
+    return msg;
+  }
+}
+
+/** Validate + kick off a Smart Fill job. Returns an error string, or null when started. */
+async function startSmartFill(req: Extract<BgRequest, { type: "SMART_FILL" }>): Promise<string | null> {
+  if (!req.fields.length) return "no fields to fill";
+  const settings = await getSettings();
+  if (settings.safety.masterKillSwitch) return "JobSmith is paused (kill switch on)";
+  if (!settings.llm.enabled) return "On-device AI is off";
+
+  const offErr = await ensureOffscreen();
+  if (offErr) return offErr;
+
+  activeSmartFill = {
+    tabId: req.tabId,
+    highlight: req.highlight,
+    total: req.fields.length,
+    filled: 0,
+    applied: new Set(),
+  };
+  // Run in the background; the offscreen's open stream port keeps us alive.
+  void runSmartFill(req, settings.resume, settings.llm.model, settings.llm.temperature);
+  return null;
+}
+
+async function runSmartFill(
+  req: Extract<BgRequest, { type: "SMART_FILL" }>,
+  resume: ResumeData,
+  model: string,
+  temperature: number,
+): Promise<void> {
+  try {
+    const resp = await sendToOffscreen({
+      target: "offscreen",
+      type: "MAP_FIELDS",
+      fields: req.fields,
+      resume,
+      model,
+      temperature,
+      ...(req.jd ? { jd: req.jd } : {}),
+    });
+
+    // Safety net: apply anything the live stream didn't deliver (e.g. the port
+    // dropped). applyField skips refs already written, so nothing double-counts.
+    if (activeSmartFill && resp.map) {
+      for (const [ref, value] of Object.entries(resp.map)) {
+        await applyField(activeSmartFill, ref, value);
+      }
+    }
+
+    const filled = activeSmartFill?.filled ?? 0;
+    sendMapProgress({
+      type: "MAP_PROGRESS",
+      phase: "generating",
+      done: true,
+      message:
+        resp.engine === "none"
+          ? `AI unavailable: ${resp.error || resp.note || "unknown"}.`
+          : `Filled ${filled} AI field(s). Review everything before you submit.`,
+    });
+  } catch (e) {
+    log.warn("smart fill run failed", e);
+    sendMapProgress({
+      type: "MAP_PROGRESS",
+      phase: "generating",
+      done: true,
+      message: `Smart Fill failed: ${e instanceof Error ? e.message : String(e)}`,
+    });
+  } finally {
+    activeSmartFill = null;
+  }
+}
 
 /* --------------------------------- alarms -------------------------------- */
 
