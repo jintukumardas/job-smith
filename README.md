@@ -1,9 +1,10 @@
 # JobSmith — Local-First Job Search Assistant (Chrome MV3)
 
 JobSmith helps you run a faster, saner job search **without sending a single byte of your
-personal data to anyone**. It tracks remote job listings, tailors your résumé to each job
-**on your own machine** (in-browser LLM via WebGPU, with an offline fallback), and politely
-auto-fills application forms — *without* the bot-like behavior that gets people blacklisted.
+personal data to anyone**. It tracks remote job listings, surfaces more roles straight from
+company career pages, tailors your résumé and writes cover letters for each job **on your own
+machine** (in-browser LLM via WebGPU, with an offline fallback), and politely auto-fills
+application forms — *without* the bot-like behavior that gets people blacklisted.
 
 > **Privacy in one sentence:** there is no server. No accounts, no analytics, no telemetry.
 > Your résumé, your contact details, and the job descriptions you tailor against never leave
@@ -34,10 +35,12 @@ auto-fills application forms — *without* the bot-like behavior that gets peopl
 | Area | What it does |
 | --- | --- |
 | **Job notifications** | Polls public remote-job sources on a schedule and sends a desktop notification when new listings match your role/location/keyword criteria. Fully configurable; per-source rate limits enforced. |
-| **Résumé tailoring** | The on-device LLM (WebLLM/WebGPU) **reads your résumé + the JD and writes the full tailored résumé** — summary, your complete skillset (relevant first), rephrased experience bullets, education, and extra sections (Achievements/Projects/Certifications) — using only facts from your résumé (invented/gap skills are filtered out; a fabricated summary is replaced). A deterministic offline engine is the automatic fallback. Export a clean **ATS-friendly PDF** (single column, selectable text, optional company accent), or copy/download Markdown. |
-| **Paste-to-fill résumé** | Paste your whole résumé once; JobSmith extracts name, contact, location and skills into structured fields (one click), which then feed both tailoring and autofill. |
+| **Job discovery** | One-click searches built from your criteria that go beyond the polled APIs: ATS/career-page Google dorks (Greenhouse, Lever, Ashby, Workable, SmartRecruiters, Workday), broad search-engine queries (company career pages, Google Jobs, DuckDuckGo), and direct board searches (LinkedIn, Wellfound, Indeed). Surfaces roles straight from company career pages — JobSmith just builds the URLs; you open them. |
+| **Résumé tailoring** | The on-device LLM (WebLLM/WebGPU) **reads your résumé + the JD and writes the full tailored résumé** — summary, your complete skillset (relevant first), rephrased experience bullets, education, and extra sections (Achievements/Projects/Certifications) — using only facts from your résumé (invented/gap skills are filtered out; a fabricated summary is replaced). A deterministic offline engine is the automatic fallback. Export a clean **ATS-friendly PDF** (single column, selectable text, optional company accent), or copy/download Markdown. You can also **bring your own Markdown** résumé (written anywhere) and export the same ATS PDF. |
+| **Cover letters** | The on-device LLM writes a short, truthful cover letter (180–260 words) from your résumé + the JD — strictly from facts in your résumé, with no inflation of seniority or invented claims. A deterministic template is the fallback. Copy or download as `.txt`. |
+| **Paste-to-fill résumé** | Paste your whole résumé once; the on-device LLM **understands** it and fills name, contact, location, skills, experience, education and extra sections into structured fields (one click). The deterministic regex parser is merged in as a safety net — it wins for email/phone/links (which it never hallucinates); the model wins for the understanding-heavy fields. Those fields then feed both tailoring and autofill. |
 | **Auto-fill** | On click, fills empty application fields using values **derived automatically from your résumé** (name, email, phone, location, links, current role) — explicit overrides still win. Matches by `autocomplete`, name/id, label, and ATS `data-*` hooks, and injects into **all frames** so iframe-embedded forms (Greenhouse) work. **Never overwrites your input. Never submits. Never clicks buttons.** |
-| **Smart Fill (AI)** | For fields the matcher can't recognize, the on-device LLM reads their labels and maps them to your résumé (strictly from your data — no fabrication). Runs in an offscreen WebGPU worker; falls back gracefully when unavailable. |
+| **Smart Fill (AI)** | For fields the matcher can't recognize, the on-device LLM reads their labels and maps them to your résumé (strictly from your data — no fabrication). It runs in the **background** service worker via an offscreen WebGPU document, streaming answers and applying them to the page **incrementally** — so it keeps going and filling fields even after you close the popup. Falls back gracefully when WebGPU is unavailable. |
 | **Application tracker** | Log saved/applied roles, statuses, dates, notes and follow-up reminders. Export to JSON/CSV. |
 | **Follow-up reminders** | Desktop reminders when a follow-up date is due. |
 | **Config page** | Everything is configurable: criteria, sources, résumé, autofill fields, notifications, engine, privacy. |
@@ -100,12 +103,15 @@ Open **Settings** (⚙ in the popup) and work through the tabs:
 
 1. **Job search** — roles, optional keywords, exclude terms, acceptable locations
    (e.g. `worldwide, anywhere, global, india, remote`), remote-only, which sources to use,
-   and how often to check. Click **Poll now** to fetch immediately.
+   and how often to check. Click **Poll now** to fetch immediately. The **Discover more jobs**
+   card turns these same criteria into one-click career-page/board searches (edit your
+   roles/locations, then **Refresh**).
 2. **Résumé** — your master résumé as structured data: basics, summary, skills, experiences
-   (one achievement per line), education, links. Optionally paste your full résumé text for
-   extra context.
+   (one achievement per line), education, links. Optionally paste your full résumé text and
+   **Import details from pasted text** to fill the fields automatically.
 3. **Résumé studio** — pick the engine (WebLLM or deterministic), paste/﻿capture a JD, and
-   tailor. See [below](#on-device-résumé-tailoring-webllm).
+   tailor. The same JD also drives the **Cover letter** generator; a **bring-your-own-Markdown**
+   card exports any Markdown résumé as an ATS PDF. See [below](#on-device-résumé-tailoring-webllm).
 4. **Autofill** — the field catalogue (key, value, match aliases). Fill in your details once.
    Add per-site disables if needed.
 5. **Notifications** — enable, batch size, quiet hours, and a test button.
@@ -126,10 +132,19 @@ Configure criteria → JobSmith polls in the background → you get a notificati
 matches → click it to open the listing. The popup shows the latest matches with **Open**,
 **Tailor**, and **Track** actions; the toolbar badge shows how many are new.
 
+**Discover more jobs**
+Settings → **Job search → Discover more jobs**: from the criteria you already set, JobSmith
+builds ready-to-run searches — ATS/career-page dorks (Greenhouse, Lever, Ashby, Workable,
+SmartRecruiters, Workday), broad career-page queries, Google Jobs, DuckDuckGo, and direct
+board searches (LinkedIn, Wellfound, Indeed). Click any to open it; tweak roles/locations and
+hit **Refresh** to rebuild them.
+
 **Set up your résumé once**
 Settings → **Résumé**: fill the fields, or just paste your whole résumé into **Base resume text**
-and click **Import details from pasted text** — JobSmith extracts your name, contact, location and
-skills into the fields (review/edit, then Save). Those values power both tailoring and autofill.
+and click **Import details from pasted text** — the on-device LLM reads it and fills your name,
+contact, location, skills, experience, education and extra sections (the regex parser is merged
+in as a safety net; if WebGPU is unavailable the quick text parser runs instead). Review/edit,
+then Save. Those values power both tailoring and autofill.
 
 **Tailor your résumé to a posting**
 On a job page, open the popup and click **Tailor resume** — JobSmith captures the JD and opens
@@ -137,15 +152,22 @@ the Résumé Studio with it pre-filled. Or click **Tailor** on any listing in th
 **Tailor resume**, review the match score / matched / missing skills, then **Save as PDF
 (ATS-friendly)** — pick an accent colour to match the company; the body stays single-column and
 selectable so applicant-tracking systems parse it cleanly. You can also **Copy**, **Download .md**,
-or **Save as application**.
+or **Save as application**. Already have a Markdown résumé? Use **Bring your own Markdown → PDF**
+to export it in the same ATS-safe layout.
+
+**Write a cover letter**
+In Résumé Studio, with a JD in the box, click **Generate cover letter** — the on-device model
+writes a short, truthful letter from your résumé and the posting (it only uses facts from your
+résumé and won't inflate your roles). **Copy** or **Download .txt**, then review before sending.
 
 **Auto-fill an application**
 On a careers/application page, open the popup and click **Autofill form**. JobSmith fills the
 empty fields it confidently recognizes — using values pulled straight from your résumé — across
 all frames (so iframe-embedded ATS forms like Greenhouse work), highlights them, and shows a
 disclosure banner. For fields it doesn't recognize (custom ATS questions), click **Smart Fill
-(AI)**: the on-device model reads those labels and maps them to your résumé. **Review everything
-and submit yourself.** Use **Clear highlights** to remove the outlines.
+(AI)**: the on-device model reads those labels and maps them to your résumé. Smart Fill runs in
+the background and applies each answer as it's ready, so it keeps filling even if you close the
+popup. **Review everything and submit yourself.** Use **Clear highlights** to remove the outlines.
 
 You only fill your details once — on the **Résumé** tab. The autofill catalogue (Settings →
 Autofill) auto-populates from it; set a field's value there only to override the résumé.
@@ -213,13 +235,17 @@ src/
     providers/             # remotive, remoteok, wwr, arbeitnow, hn + registry
     filter.ts              # role/keyword/location matching + scoring (pure)
     aggregator.ts          # rate-limited polling cycle
+    discovery.ts           # criteria → ATS/career-page dork & board search URLs (pure)
   resume/
     skills.ts              # skill dictionary + detection (pure)
     jd-parser.ts           # JD → keywords/skills/requirements (pure)
     engine.ts              # ResumeEngine interface
     deterministic.ts       # offline engine
     webllm.ts + llm.worker.ts + llm-protocol.ts   # on-device LLM engine
-    render.ts              # tailored résumé → Markdown (pure)
+    parse-resume.ts        # deterministic résumé-text → structured fields (pure)
+    parse-resume-llm.ts    # on-device LLM résumé parse + merge with regex parse
+    cover-letter.ts        # on-device (or template) cover-letter generation
+    render.ts              # tailored résumé → Markdown / ATS HTML (pure)
     tailor.ts              # orchestration + skill match + scoring
   autofill/
     matcher.ts             # DOM field → profile key matching, incl. ATS data-* hooks (pure)
@@ -228,7 +254,7 @@ src/
     llm-map.ts             # map unmatched fields to résumé via the on-device LLM
   content/                 # on-demand, all-frames content API + overlay styles
   offscreen/               # headless WebGPU/WebLLM host for Smart Fill
-  background/              # service worker, alarms, notifications
+  background/              # service worker, alarms, notifications, background Smart Fill (streams answers → tab)
   popup/  options/  ui/    # UI
 test/                      # vitest unit tests for all the pure logic
 examples/                  # importable example settings + résumé
@@ -252,7 +278,7 @@ Design choices worth knowing:
 npm run dev         # rebuild on change (sourcemaps, no minify)
 npm run build       # production build → dist/
 npm run typecheck   # tsc --noEmit (strict)
-npm test            # vitest (67 tests)
+npm test            # vitest (131 tests)
 npm run lint        # eslint
 npm run package     # build + zip → job-smith.zip
 ```
