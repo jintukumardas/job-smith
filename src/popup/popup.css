@@ -147,8 +147,56 @@ section {
   padding: 8px 10px;
 }
 
+.job-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .job .title {
   font-weight: 600;
+}
+
+.match {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.match.high {
+  background: #dcfce7;
+  color: #047857;
+}
+
+.match.mid {
+  background: #fef9c3;
+  color: #92400e;
+}
+
+.match.low {
+  background: var(--chip);
+  color: var(--muted);
+}
+
+@media (prefers-color-scheme: dark) {
+  .match.high {
+    background: #064e3b;
+    color: #6ee7b7;
+  }
+
+  .match.mid {
+    background: #422006;
+    color: #fcd34d;
+  }
+}
+
+.match-gaps {
+  margin-top: 6px;
 }
 
 .job .meta {

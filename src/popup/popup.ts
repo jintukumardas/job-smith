@@ -16,6 +16,7 @@ import {
 } from "../lib/messaging.js";
 import type { CapturedJd } from "../lib/messaging.js";
 import { resolveAutofillFields } from "../autofill/profile.js";
+import { isResumeMatchable, matchResumeToJd, type JobMatch } from "../resume/job-match.js";
 import { trackJob } from "../tracker/store.js";
 import { formatRelativeTime, truncate } from "../lib/util.js";
 import type { AutofillField, Job, Settings } from "../types/index.js";
@@ -25,6 +26,9 @@ import { createLogger } from "../lib/logger.js";
 
 const log = createLogger("popup");
 let settings: Settings | null = null;
+
+/** How many relevance-ranked listings to re-score against the résumé (we show 40). */
+const RANK_WINDOW = 60;
 
 /** Load settings once; handlers call this so they never run against undefined. */
 async function ensureSettings(): Promise<Settings> {
@@ -423,16 +427,37 @@ async function renderStatus(): Promise<void> {
 
 async function renderJobs(): Promise<void> {
   const list = byId("job-list");
-  const jobs = await getJobsCache();
+  const [s, jobs] = await Promise.all([ensureSettings(), getJobsCache()]);
   clear(list);
   if (jobs.length === 0) {
     list.appendChild(h("div", { class: "empty", text: "No matched jobs yet." }));
     return;
   }
-  for (const job of jobs.slice(0, 40)) list.appendChild(jobCard(job));
+
+  // Score the relevance-ranked candidates against the résumé (pure + on-device)
+  // and lead with the best fit. We only re-rank the top window the cache already
+  // surfaced — enough to find the strong matches without scoring all 200. Without
+  // a résumé we can't score, so the existing relevance order stands.
+  const matchable = isResumeMatchable(s.resume);
+  const ranked = jobs.slice(0, RANK_WINDOW).map((job, idx) => ({
+    job,
+    idx,
+    match: matchable ? matchResumeToJd(s.resume, jobText(job)) : null,
+  }));
+  if (matchable) {
+    // Best résumé match first; ties fall back to the existing relevance order.
+    ranked.sort((a, b) => b.match!.score - a.match!.score || a.idx - b.idx);
+  }
+
+  for (const { job, match } of ranked.slice(0, 40)) list.appendChild(jobCard(job, match));
 }
 
-function jobCard(job: Job): HTMLElement {
+/** Title + JD text used to score a listing against the résumé. */
+function jobText(job: Job): string {
+  return `${job.title}\n${job.descriptionText || job.description || ""}`;
+}
+
+function jobCard(job: Job, match: JobMatch | null): HTMLElement {
   const chips: HTMLElement[] = [];
   if (job.salary) chips.push(h("span", { class: "chip", text: job.salary }));
   for (const tag of job.tags.slice(0, 4)) chips.push(h("span", { class: "chip", text: tag }));
@@ -441,12 +466,20 @@ function jobCard(job: Job): HTMLElement {
   return h(
     "div",
     { class: "job" },
-    h("div", { class: "title", text: truncate(job.title, 70) }),
+    h(
+      "div",
+      { class: "job-head" },
+      h("div", { class: "title", text: truncate(job.title, 60) }),
+      match ? matchBadge(match) : null,
+    ),
     h("div", {
       class: "meta",
       text: `${job.company}${job.location ? ` · ${job.location}` : ""} · ${job.sourceLabel}${posted}`,
     }),
     chips.length ? h("div", { class: "chips" }, ...chips) : null,
+    match && match.missing.length
+      ? h("div", { class: "match-gaps small muted", text: `Gaps: ${match.missing.slice(0, 6).join(", ")}` })
+      : null,
     h(
       "div",
       { class: "actions" },
@@ -456,6 +489,19 @@ function jobCard(job: Job): HTMLElement {
     ),
     job.attribution ? h("div", { class: "attribution", text: job.attribution }) : null,
   );
+}
+
+/** A coloured "NN% match" pill; hover reveals which skills matched / are missing. */
+function matchBadge(match: JobMatch): HTMLElement {
+  const tier = match.score >= 70 ? "high" : match.score >= 40 ? "mid" : "low";
+  const lines: string[] = [];
+  if (match.matched.length) lines.push(`Matched: ${match.matched.slice(0, 12).join(", ")}`);
+  if (match.missing.length) lines.push(`Missing: ${match.missing.slice(0, 12).join(", ")}`);
+  return h("span", {
+    class: `match ${tier}`,
+    title: lines.join("\n") || "No overlapping skills detected — add the JD to Résumé Studio for a tailored pass.",
+    text: `${match.score}% match`,
+  });
 }
 
 function openUrl(url: string): void {
