@@ -10,7 +10,8 @@ import type { ResumeData, ResumeExperience, Settings, TailoredResume } from "../
 import type { EngineProgress, EngineTailorResult, ResumeEngine, TailorRequest } from "./engine.js";
 import { extractJd } from "./jd-parser.js";
 import { enrichResume } from "./parse-resume.js";
-import { curateSkills, detectSkills, normalizeSkill, sameSkill } from "./skills.js";
+import { curateSkills, detectSkills, sameSkill } from "./skills.js";
+import { computeMatchScore, computeSkillMatch } from "./job-match.js";
 import { DeterministicEngine, composeSummary } from "./deterministic.js";
 import { WebLLMEngine } from "./webllm.js";
 import { renderResumeMarkdown, renderResumeHtml, type RenderedExperience } from "./render.js";
@@ -72,30 +73,15 @@ async function resolveEngine(
 
 /* --------------------------------- public -------------------------------- */
 
-export interface SkillMatch {
-  matched: string[];
-  missing: string[];
-  resumeSkills: string[];
-}
-
-/** All canonical skills the resume evidences (declared + per-role + free text). */
-export function gatherResumeSkills(resume: ResumeData): string[] {
-  const declared = resume.skills.map(normalizeSkill);
-  const perRole = resume.experiences.flatMap((e) => e.skills.map(normalizeSkill));
-  const fromText = detectSkills(
-    [resume.baseResumeText, resume.summary, ...resume.experiences.flatMap((e) => e.bullets)].join(
-      "\n",
-    ),
-  );
-  return uniqCi([...declared, ...perRole, ...fromText]);
-}
-
-export function computeSkillMatch(resume: ResumeData, jdSkills: string[]): SkillMatch {
-  const resumeSkills = gatherResumeSkills(resume);
-  const matched = jdSkills.filter((s) => resumeSkills.some((rs) => sameSkill(rs, s)));
-  const missing = jdSkills.filter((s) => !matched.some((m) => sameSkill(m, s)));
-  return { matched: uniqCi(matched), missing: uniqCi(missing), resumeSkills };
-}
+// The pure résumé↔JD scoring lives in ./job-match (kept light so the popup can
+// reuse it without the engine bundle). Re-exported here for back-compat.
+export {
+  computeMatchScore,
+  computeSkillMatch,
+  gatherResumeSkills,
+  matchResumeToJd,
+} from "./job-match.js";
+export type { JobMatch, SkillMatch } from "./job-match.js";
 
 export async function tailorResume(
   resume: ResumeData,
@@ -288,36 +274,4 @@ export function backfillExperiences(
     if (!used.has(i)) merged.push(src);
   });
   return merged;
-}
-
-export function computeMatchScore(
-  matched: string[],
-  analysis: ReturnType<typeof extractJd>,
-  resume: ResumeData,
-  resumeSkills: string[],
-): number {
-  let coverage: number;
-  if (analysis.skills.length > 0) {
-    coverage = matched.length / analysis.skills.length;
-  } else {
-    // Fall back to keyword coverage against the resume corpus.
-    const corpus = new Set(
-      tokenize(
-        [resume.summary, resume.headline, ...resumeSkills, ...resume.experiences.flatMap((e) => e.bullets)].join(
-          " ",
-        ),
-      ),
-    );
-    const kw = analysis.keywords.slice(0, 20);
-    coverage = kw.length ? kw.filter((k) => corpus.has(k.toLowerCase())).length / kw.length : 0;
-  }
-
-  const role = analysis.role?.toLowerCase() ?? "";
-  const roleHaystack = `${resume.headline} ${resume.experiences.map((e) => e.title).join(" ")}`.toLowerCase();
-  const roleMatch = role
-    ? tokenize(role).some((t) => t.length > 3 && roleHaystack.includes(t))
-    : false;
-
-  const score = coverage * 70 + (roleMatch ? 20 : 0) + Math.min(10, matched.length * 2);
-  return Math.max(0, Math.min(100, Math.round(score)));
 }
