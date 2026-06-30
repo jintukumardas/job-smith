@@ -16,8 +16,9 @@ import {
   type FillResult,
   type CollectedField,
 } from "../autofill/filler.js";
-import type { AutofillField } from "../types/index.js";
+import type { AutofillField, ScrapedJob } from "../types/index.js";
 import type { CapturedJd } from "../lib/messaging.js";
+import { extractJobsFromHtml } from "../jobs/scrape-html.js";
 import { createLogger } from "../lib/logger.js";
 
 const log = createLogger("content");
@@ -33,6 +34,8 @@ export interface JobSmithContentApi {
   collect(fields: AutofillField[]): CollectedField[];
   applyMap(payload: { map: Record<string, string>; highlight: boolean }): number;
   captureJd(): CapturedJd;
+  scanJobs(): ScrapedJob[];
+  detectAts(): string[];
   clear(): void;
 }
 
@@ -59,6 +62,25 @@ const api: JobSmithContentApi = {
   },
   captureJd() {
     return captureJd();
+  },
+  scanJobs() {
+    // Parse the live, rendered DOM (so SPA results like LinkedIn/Indeed that
+    // load client-side are included) with the same extractor the background
+    // poll uses for fetched pages.
+    try {
+      return extractJobsFromHtml(document.documentElement.outerHTML, location.href);
+    } catch (e) {
+      log.warn("scanJobs failed", e);
+      return [];
+    }
+  },
+  detectAts() {
+    try {
+      return detectAtsLinks();
+    } catch (e) {
+      log.warn("detectAts failed", e);
+      return [];
+    }
   },
   clear() {
     clearHighlights();
@@ -126,6 +148,36 @@ function pickLargestText(selectors: string[]): string {
 
 function firstHeading(): string {
   return document.querySelector("h1")?.textContent?.trim() ?? "";
+}
+
+/* ----------------------------- ATS detection ----------------------------- */
+
+/** Hosts whose presence on a page reveals the ATS powering it. */
+const ATS_HOST_RE =
+  /(boards\.greenhouse\.io|job-boards\.greenhouse\.io|greenhouse\.io\/embed|jobs\.lever\.co|jobs\.ashbyhq\.com|jobs\.smartrecruiters\.com|myworkdayjobs\.com)/i;
+
+/**
+ * Find ATS board URLs referenced by the live page (links, embeds, scripts). Many
+ * career SPAs link out to (or embed) their ATS — Greenhouse/Lever/Ashby/
+ * SmartRecruiters/Workday — even when the page itself is unscrapeable. Returns
+ * absolute URLs for the background to resolve into a trackable source.
+ */
+function detectAtsLinks(): string[] {
+  const urls = new Set<string>();
+  const consider = (value: string | null): void => {
+    if (!value || !ATS_HOST_RE.test(value)) return;
+    try {
+      urls.add(new URL(value, location.href).toString());
+    } catch {
+      /* ignore unparseable */
+    }
+  };
+  document.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((a) => consider(a.getAttribute("href")));
+  document
+    .querySelectorAll<HTMLElement>("iframe[src], script[src], link[href]")
+    .forEach((el) => consider(el.getAttribute("src") ?? el.getAttribute("href")));
+  if (ATS_HOST_RE.test(location.href)) urls.add(location.href);
+  return [...urls].slice(0, 50);
 }
 
 function guessCompany(): string | undefined {

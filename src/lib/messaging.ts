@@ -5,7 +5,7 @@
  * messaging — the popup drives the content API directly via chrome.scripting so
  * it can target and aggregate across all frames.
  */
-import type { ProviderState, ResumeData } from "../types/index.js";
+import type { ProviderState, ResumeData, ScrapedJob } from "../types/index.js";
 
 /* ------------------------------ Shared payloads --------------------------- */
 
@@ -34,7 +34,15 @@ export type BgRequest =
   | { type: "SYNC_REMINDERS" }
   // Hand the slow on-device Smart Fill off to the service worker so it keeps
   // running — and keeps applying answers to the page — after the popup closes.
-  | { type: "SMART_FILL"; tabId: number; fields: FieldForLlm[]; jd?: JdContext; highlight: boolean };
+  | { type: "SMART_FILL"; tabId: number; fields: FieldForLlm[]; jd?: JdContext; highlight: boolean }
+  // Jobs scraped from the page the user is viewing ("Scan this page").
+  | { type: "ADD_SCANNED_JOBS"; jobs: ScrapedJob[]; sourceLabel: string }
+  // Test a single custom source: fetch it, and if it's an unscrapeable SPA, try
+  // to auto-detect the ATS behind it. Powers the "Test / auto-detect" button.
+  | { type: "RESOLVE_CUSTOM_SOURCE"; url: string; label: string }
+  // Detect the ATS behind the page the user is viewing and add it as a tracked
+  // source. Powers the popup "Detect & add this page" button.
+  | { type: "DETECT_AND_ADD"; pageUrl: string; candidates: string[]; label: string };
 
 /** Port (offscreen -> service worker) that streams each answer as it's produced
  *  and, while connected, keeps the service worker alive for the whole job. */
@@ -50,6 +58,30 @@ export type SmartFillStream =
 
 export type BgResponse =
   | { type: "POLL_RESULT"; ok: boolean; newCount: number; total: number; error?: string }
+  | { type: "SCAN_RESULT"; added: number; total: number }
+  | {
+      type: "RESOLVE_RESULT";
+      /** True if jobs were found (directly or via the detected ATS). */
+      ok: boolean;
+      count: number;
+      /** Sample titles for a quick sanity check. */
+      samples: string[];
+      /** Set when an ATS was auto-detected behind an SPA; the URL to switch to. */
+      suggestedUrl?: string;
+      /** Human label for the detection (e.g. "Greenhouse: adyen"). */
+      detected?: string;
+      error?: string;
+    }
+  | {
+      type: "DETECT_RESULT";
+      added: boolean;
+      count: number;
+      /** Detection label (e.g. "greenhouse: adyen"). */
+      detected?: string;
+      /** The board URL added as a source. */
+      url?: string;
+      error?: string;
+    }
   | {
       type: "STATUS";
       providerState: Record<string, ProviderState>;

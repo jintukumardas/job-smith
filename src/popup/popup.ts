@@ -19,7 +19,7 @@ import { resolveAutofillFields } from "../autofill/profile.js";
 import { isResumeMatchable, matchResumeToJd, type JobMatch } from "../resume/job-match.js";
 import { trackJob } from "../tracker/store.js";
 import { formatRelativeTime, truncate } from "../lib/util.js";
-import type { AutofillField, Job, Settings } from "../types/index.js";
+import type { AutofillField, Job, ScrapedJob, Settings } from "../types/index.js";
 import type { CollectedField, FillResult } from "../autofill/filler.js";
 import type { FillPayload } from "../content/autofill-content.js";
 import { createLogger } from "../lib/logger.js";
@@ -29,6 +29,11 @@ let settings: Settings | null = null;
 
 /** How many relevance-ranked listings to re-score against the résumé (we show 40). */
 const RANK_WINDOW = 60;
+/** Max cards rendered after filtering. */
+const MAX_CARDS = 40;
+
+/** The ranked listings from the last render, kept so filters re-render without re-scoring. */
+let rankedJobs: { job: Job; match: JobMatch | null }[] = [];
 
 /** Load settings once; handlers call this so they never run against undefined. */
 async function ensureSettings(): Promise<Settings> {
@@ -53,6 +58,10 @@ const COLLECT_FN = (fields: AutofillField[]): CollectedField[] =>
   window.__jobsmith ? window.__jobsmith.collect(fields) : [];
 const CAPTURE_FN = (): CapturedJd | null =>
   window.__jobsmith ? window.__jobsmith.captureJd() : null;
+const SCAN_FN = (): ScrapedJob[] =>
+  window.__jobsmith ? window.__jobsmith.scanJobs() : [];
+const DETECT_FN = (): string[] =>
+  window.__jobsmith ? window.__jobsmith.detectAts() : [];
 const CLEAR_FN = (): void => {
   window.__jobsmith?.clear();
 };
@@ -82,7 +91,7 @@ async function boot(): Promise<void> {
 function applyKillState(s: Settings): void {
   const killed = s.safety.masterKillSwitch;
   byId("kill-indicator").classList.toggle("hidden", !killed);
-  for (const id of ["act-autofill", "act-smartfill", "act-capture", "act-track", "act-clear"]) {
+  for (const id of ["act-autofill", "act-smartfill", "act-capture", "act-track", "act-scan", "act-detect", "act-clear"]) {
     (byId(id) as HTMLButtonElement).disabled = killed;
   }
 }
@@ -124,8 +133,17 @@ function wireButtons(): void {
   on("act-smartfill", () => void doSmartFill());
   on("act-capture", () => void doCaptureTailor());
   on("act-track", () => void doTrackPage());
+  on("act-scan", () => void doScanPage());
+  on("act-detect", () => void doDetectAdd());
   on("act-clear", () => void doClear());
   on("poll-now", () => void doPoll());
+
+  const search = document.getElementById("job-search");
+  if (search) search.addEventListener("input", applyJobFilters);
+  const source = document.getElementById("job-source");
+  if (source) source.addEventListener("change", applyJobFilters);
+  const age = document.getElementById("job-age");
+  if (age) age.addEventListener("change", applyJobFilters);
 }
 
 /* ----------------------------- tab scripting ----------------------------- */
@@ -386,6 +404,101 @@ async function doClear(): Promise<void> {
   flash(byId("page-status"), "Highlights cleared.", "ok");
 }
 
+/** Read job listings from the page the user is viewing and add them to the list. */
+async function doScanPage(): Promise<void> {
+  const status = byId("page-status");
+  const s = await ensureSettings();
+  if (s.safety.masterKillSwitch) {
+    setStatus(status, "JobSmith is paused (kill switch on). Turn it off in Settings → Privacy & safety.", "err");
+    return;
+  }
+  const tab = await getActiveTab();
+  if (!tab?.id || isRestricted(tab.url)) {
+    setStatus(status, "Can't scan this page — open a job board or a company careers page first.", "err");
+    return;
+  }
+  setStatus(status, "Scanning this page for jobs…", "info");
+  if (!(await ensureContent(tab.id))) {
+    setStatus(status, "Couldn't read this page. Reload it and try again.", "err");
+    return;
+  }
+
+  // Merge results from every frame, de-duped by URL.
+  const frames = await execAllFrames(tab.id, SCAN_FN, []);
+  const byUrl = new Map<string, ScrapedJob>();
+  for (const frame of frames) {
+    for (const job of frame.result ?? []) {
+      if (job.url && !byUrl.has(job.url)) byUrl.set(job.url, job);
+    }
+  }
+  const jobs = [...byUrl.values()];
+  if (jobs.length === 0) {
+    setStatus(status, "No job listings found on this page. Open a search results page or a careers listing.", "err");
+    return;
+  }
+
+  const resp = await sendToBackground({
+    type: "ADD_SCANNED_JOBS",
+    jobs,
+    sourceLabel: hostOf(tab.url) || "Scanned page",
+  });
+  if (resp.type === "SCAN_RESULT") {
+    setStatus(
+      status,
+      `Found ${resp.total} listing(s) — added ${resp.added} new to your list below.`,
+      "ok",
+    );
+    await renderJobs();
+  } else if (resp.type === "ERROR") {
+    setStatus(status, resp.error, "err");
+  }
+}
+
+/** Detect the ATS behind the current career page and add it as a tracked source. */
+async function doDetectAdd(): Promise<void> {
+  const status = byId("page-status");
+  const s = await ensureSettings();
+  if (s.safety.masterKillSwitch) {
+    setStatus(status, "JobSmith is paused (kill switch on). Turn it off in Settings → Privacy & safety.", "err");
+    return;
+  }
+  const tab = await getActiveTab();
+  if (!tab?.id || isRestricted(tab.url)) {
+    setStatus(status, "Open a company careers page first, then Detect & add.", "err");
+    return;
+  }
+  setStatus(status, "Detecting the job source on this page…", "info");
+  if (!(await ensureContent(tab.id))) {
+    setStatus(status, "Couldn't read this page. Reload it and try again.", "err");
+    return;
+  }
+
+  const frames = await execAllFrames(tab.id, DETECT_FN, []);
+  const candidates = new Set<string>();
+  for (const frame of frames) for (const url of frame.result ?? []) candidates.add(url);
+
+  const resp = await sendToBackground({
+    type: "DETECT_AND_ADD",
+    pageUrl: tab.url ?? "",
+    candidates: [...candidates],
+    label: hostOf(tab.url),
+  });
+  if (resp.type === "DETECT_RESULT") {
+    if (resp.added) {
+      setStatus(
+        status,
+        `Tracking ${resp.detected} — added ${resp.count} jobs. It'll refresh automatically from now on.`,
+        "ok",
+      );
+      await renderJobs();
+    } else {
+      setStatus(status, resp.error ?? "Couldn't detect a job source. Try “Scan this page” instead.", "err");
+    }
+  } else if (resp.type === "ERROR") {
+    setStatus(status, resp.error, "err");
+  }
+}
+
 function sumReports(results: FrameResult<FillResult | null>[]): number {
   return results.reduce((acc, r) => acc + (r.result?.report.length ?? 0), 0);
 }
@@ -428,8 +541,10 @@ async function renderStatus(): Promise<void> {
 async function renderJobs(): Promise<void> {
   const list = byId("job-list");
   const [s, jobs] = await Promise.all([ensureSettings(), getJobsCache()]);
-  clear(list);
   if (jobs.length === 0) {
+    rankedJobs = [];
+    populateSourceFilter([]);
+    clear(list);
     list.appendChild(h("div", { class: "empty", text: "No matched jobs yet." }));
     return;
   }
@@ -449,7 +564,55 @@ async function renderJobs(): Promise<void> {
     ranked.sort((a, b) => b.match!.score - a.match!.score || a.idx - b.idx);
   }
 
-  for (const { job, match } of ranked.slice(0, 40)) list.appendChild(jobCard(job, match));
+  rankedJobs = ranked.map(({ job, match }) => ({ job, match }));
+  populateSourceFilter(rankedJobs.map((r) => r.job));
+  applyJobFilters();
+}
+
+/** Fill the source dropdown with the distinct sources present in the cache. */
+function populateSourceFilter(jobs: Job[]): void {
+  const sel = document.getElementById("job-source") as HTMLSelectElement | null;
+  if (!sel) return;
+  const prev = sel.value;
+  const labels = Array.from(new Set(jobs.map((j) => j.sourceLabel).filter(Boolean))).sort();
+  clear(sel);
+  sel.appendChild(h("option", { value: "", text: "All sources" }));
+  for (const label of labels) sel.appendChild(h("option", { value: label, text: label }));
+  // Preserve the prior selection if it still exists.
+  sel.value = labels.includes(prev) ? prev : "";
+}
+
+/** Render the ranked list filtered by the search box + source dropdown. */
+function applyJobFilters(): void {
+  const list = byId("job-list");
+  const query = (document.getElementById("job-search") as HTMLInputElement | null)?.value
+    .trim()
+    .toLowerCase() ?? "";
+  const source = (document.getElementById("job-source") as HTMLSelectElement | null)?.value ?? "";
+  const ageDays = Number((document.getElementById("job-age") as HTMLSelectElement | null)?.value) || 0;
+  const cutoff = ageDays > 0 ? Date.now() - ageDays * 86_400_000 : 0;
+
+  const filtered = rankedJobs.filter(({ job }) => {
+    if (source && job.sourceLabel !== source) return false;
+    if (query && !jobMatchesQuery(job, query)) return false;
+    // Posting-age filter: drop listings with a known date older than the window.
+    // Listings with no known date are kept (we can't judge their age).
+    if (cutoff && typeof job.postedAt === "number" && job.postedAt < cutoff) return false;
+    return true;
+  });
+
+  clear(list);
+  if (filtered.length === 0) {
+    const msg = rankedJobs.length === 0 ? "No matched jobs yet." : "No jobs match your filters.";
+    list.appendChild(h("div", { class: "empty", text: msg }));
+    return;
+  }
+  for (const { job, match } of filtered.slice(0, MAX_CARDS)) list.appendChild(jobCard(job, match));
+}
+
+function jobMatchesQuery(job: Job, query: string): boolean {
+  const hay = `${job.title} ${job.company} ${job.location} ${job.tags.join(" ")}`.toLowerCase();
+  return hay.includes(query);
 }
 
 /** Title + JD text used to score a listing against the résumé. */

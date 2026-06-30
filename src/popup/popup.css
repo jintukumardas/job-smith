@@ -133,6 +133,33 @@ section {
   padding: 0;
 }
 
+.job-filters {
+  display: flex;
+  gap: 6px;
+  margin: 6px 0 8px;
+}
+
+.job-filters #job-search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.job-filters input,
+.job-filters select {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 7px;
+}
+
+.job-filters select {
+  flex: 0 0 auto;
+  max-width: 45%;
+}
+
 .job-list {
   display: flex;
   flex-direction: column;

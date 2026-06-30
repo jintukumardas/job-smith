@@ -94,7 +94,11 @@ export function defaultSettings(): Settings {
         wwr: true,
         arbeitnow: false,
         hn: false,
+        custom: true,
       },
+      customSources: [],
+      customBypassFilters: true,
+      maxAgeDays: 45,
       pollFrequencyMinutes: 180,
     },
     resume: {

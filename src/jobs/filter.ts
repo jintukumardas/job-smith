@@ -13,6 +13,18 @@ export interface MatchCriteria {
   excludeKeywords: string[];
   locations: string[];
   remoteOnly: boolean;
+  /**
+   * Hard recency cutoff in days. A listing with a known posting date older than
+   * this is rejected. 0 (or omitted) disables the cutoff. Listings with no known
+   * date are always kept — we can't judge their age.
+   */
+  maxAgeDays?: number;
+  /**
+   * When true, jobs from custom sources (`source === "custom"`) skip the
+   * role/location/remote constraints. Exclude-keywords and the recency cutoff
+   * still apply.
+   */
+  bypassCustom?: boolean;
 }
 
 export interface MatchResult {
@@ -78,53 +90,68 @@ function containsAny(haystack: string, needles: string[]): string | null {
 export function matchesJob(job: Job, c: MatchCriteria): MatchResult {
   const reasons: string[] = [];
   let score = 0;
-
-  // Remote requirement.
-  if (c.remoteOnly && !job.remote) {
-    return { match: false, score: 0, reasons: ["not remote"] };
-  }
-
-  // Role.
-  if (!matchesRole(job.title, c.roles)) {
-    return { match: false, score: 0, reasons: ["role mismatch"] };
-  }
-  if (c.roles.length) {
-    const exactPhrase = c.roles.some((r) =>
-      job.title.toLowerCase().includes(r.toLowerCase().trim()),
-    );
-    score += exactPhrase ? 40 : 22;
-    reasons.push(exactPhrase ? "role: exact" : "role: related");
-  }
-
   const haystack = `${job.title}\n${job.descriptionText}`;
 
-  // Exclude keywords.
+  // Exclude keywords — always disqualifying, even for custom sources.
   const excluded = containsAny(haystack, c.excludeKeywords);
   if (excluded) {
     return { match: false, score: 0, reasons: [`excluded by "${excluded}"`] };
   }
 
-  // Required keywords (any-of).
-  if (c.keywords.length) {
-    const hits = c.keywords.filter((k) => containsAny(haystack, [k]));
-    if (hits.length === 0) {
-      return { match: false, score: 0, reasons: ["no keyword match"] };
+  // Hard recency cutoff: drop stale postings (e.g. a 2-year-old listing still
+  // live in a feed). Only applies when we actually know the posting date — and
+  // it applies to every source, custom ones included.
+  if (c.maxAgeDays && c.maxAgeDays > 0 && typeof job.postedAt === "number") {
+    const ageDays = (job.fetchedAt - job.postedAt) / 86_400_000;
+    if (ageDays > c.maxAgeDays) {
+      return { match: false, score: 0, reasons: [`older than ${c.maxAgeDays}d`] };
     }
-    score += Math.min(30, hits.length * 12);
-    reasons.push(`keywords: ${hits.join(", ")}`);
   }
 
-  // Location (match against the listing's location text only).
-  if (c.locations.length) {
-    const loc = containsAny(job.location, c.locations);
-    if (!loc) {
-      return { match: false, score: 0, reasons: ["location mismatch"] };
+  // Custom sources the user explicitly added bypass the role/location/remote
+  // search criteria — you asked to track THIS company, so show its roles.
+  const bypass = !!c.bypassCustom && job.source === "custom";
+
+  if (bypass) {
+    score += 25; // base relevance so tracked-company roles rank sensibly
+    reasons.push("tracked source");
+  } else {
+    // Remote requirement.
+    if (c.remoteOnly && !job.remote) {
+      return { match: false, score: 0, reasons: ["not remote"] };
     }
-    const l = loc.toLowerCase();
-    if (l.includes("india")) score += 20;
-    else if (["worldwide", "anywhere", "global"].some((t) => l.includes(t))) score += 15;
-    else score += 8;
-    reasons.push(`location: ${loc}`);
+    // Role.
+    if (!matchesRole(job.title, c.roles)) {
+      return { match: false, score: 0, reasons: ["role mismatch"] };
+    }
+    if (c.roles.length) {
+      const exactPhrase = c.roles.some((r) =>
+        job.title.toLowerCase().includes(r.toLowerCase().trim()),
+      );
+      score += exactPhrase ? 40 : 22;
+      reasons.push(exactPhrase ? "role: exact" : "role: related");
+    }
+    // Required keywords (any-of).
+    if (c.keywords.length) {
+      const hits = c.keywords.filter((k) => containsAny(haystack, [k]));
+      if (hits.length === 0) {
+        return { match: false, score: 0, reasons: ["no keyword match"] };
+      }
+      score += Math.min(30, hits.length * 12);
+      reasons.push(`keywords: ${hits.join(", ")}`);
+    }
+    // Location (match against the listing's location text only).
+    if (c.locations.length) {
+      const loc = containsAny(job.location, c.locations);
+      if (!loc) {
+        return { match: false, score: 0, reasons: ["location mismatch"] };
+      }
+      const l = loc.toLowerCase();
+      if (l.includes("india")) score += 20;
+      else if (["worldwide", "anywhere", "global"].some((t) => l.includes(t))) score += 15;
+      else score += 8;
+      reasons.push(`location: ${loc}`);
+    }
   }
 
   // Recency bonus.

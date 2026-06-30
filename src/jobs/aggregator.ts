@@ -24,11 +24,13 @@ export function criteriaFromSettings(s: JobSearchSettings): MatchCriteria {
     excludeKeywords: clean(s.excludeKeywords),
     locations: clean(s.locations),
     remoteOnly: s.remoteOnly,
+    maxAgeDays: Math.max(0, s.maxAgeDays ?? 0),
+    bypassCustom: s.customBypassFilters ?? true,
   };
 }
 
 /** HTTP helpers with timeout + non-2xx -> throw. */
-function createHttp(timeoutMs = DEFAULT_TIMEOUT_MS) {
+export function createHttp(timeoutMs = DEFAULT_TIMEOUT_MS) {
   async function doFetch(url: string, init?: RequestInit): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -110,6 +112,7 @@ export async function pollJobs(
   const ctx: Omit<ProviderContext, "log"> = {
     roles: criteria.roles,
     keywords: criteria.keywords,
+    customSources: settings.jobSearch.customSources ?? [],
     now,
     fetchJson: http.fetchJson,
     fetchText: http.fetchText,

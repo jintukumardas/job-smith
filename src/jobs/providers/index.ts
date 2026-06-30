@@ -5,6 +5,7 @@ import { remoteOkProvider } from "./remoteok.js";
 import { wwrProvider } from "./wwr.js";
 import { arbeitnowProvider } from "./arbeitnow.js";
 import { hnProvider } from "./hn.js";
+import { customProvider } from "./custom.js";
 
 export const PROVIDERS: JobProvider[] = [
   remotiveProvider,
@@ -12,6 +13,7 @@ export const PROVIDERS: JobProvider[] = [
   wwrProvider,
   arbeitnowProvider,
   hnProvider,
+  customProvider,
 ];
 
 export const PROVIDER_MAP: Record<string, JobProvider> = Object.fromEntries(

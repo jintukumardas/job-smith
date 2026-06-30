@@ -5,7 +5,7 @@
  * or an RSS feed) — never HTML scraping. Providers normalize their source into
  * the shared {@link Job} shape via {@link buildJob}.
  */
-import type { Job } from "../types/index.js";
+import type { CustomSource, Job } from "../types/index.js";
 import type { Logger } from "../lib/logger.js";
 import { jobId, stripHtml, truncate, uniqCi } from "../lib/util.js";
 
@@ -14,6 +14,8 @@ export interface ProviderContext {
   roles: string[];
   /** Extra keywords the user wants. */
   keywords: string[];
+  /** User-added career-page / feed sources (consumed by the custom provider). */
+  customSources: CustomSource[];
   now: number;
   log: Logger;
   /** Fetch + parse JSON with a timeout. Throws on non-2xx. */

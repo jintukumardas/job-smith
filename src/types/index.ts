@@ -15,6 +15,22 @@ export const APP_VERSION: string =
 
 /* -------------------------------- Settings ------------------------------- */
 
+/**
+ * A user-added job source: a career-page or feed URL JobSmith fetches in
+ * addition to the built-in providers. Supported shapes are detected from the
+ * URL (see {@link parseCustomSource}): Greenhouse / Lever / Ashby public board
+ * APIs, or any RSS/Atom feed. No HTML scraping.
+ */
+export interface CustomSource {
+  /** Stable local id. */
+  id: string;
+  /** Display name shown in the popup/settings (e.g. the company name). */
+  label: string;
+  /** The career-page or feed URL the user pasted. */
+  url: string;
+  enabled: boolean;
+}
+
 export interface JobSearchSettings {
   /** Master toggle for background job polling. */
   enabled: boolean;
@@ -33,6 +49,19 @@ export interface JobSearchSettings {
   remoteOnly: boolean;
   /** providerId -> enabled. */
   providers: Record<string, boolean>;
+  /** User-added career-page / feed sources fetched alongside the providers. */
+  customSources: CustomSource[];
+  /**
+   * When true, listings from custom sources skip the Roles / Locations /
+   * Remote-only filters (you added the company on purpose, so show its roles).
+   * Exclude-keywords and the recency cutoff still apply. Default true.
+   */
+  customBypassFilters: boolean;
+  /**
+   * Hard recency cutoff: hide listings with a known posting date older than this
+   * many days. 0 disables the cutoff. Listings with no known date are kept.
+   */
+  maxAgeDays: number;
   /** Desired polling cadence in minutes; clamped to provider minimums. */
   pollFrequencyMinutes: number;
 }
@@ -197,6 +226,21 @@ export interface ProviderState {
   lastFetch: number;
   lastError?: string;
   lastCount?: number;
+}
+
+/**
+ * A raw job extracted by HTML scraping — either from a fetched career page
+ * (background) or the page you're viewing ("Scan this page"). Normalized into a
+ * {@link Job} by the consumer.
+ */
+export interface ScrapedJob {
+  title: string;
+  url: string;
+  company?: string;
+  location?: string;
+  description?: string;
+  /** Posting time, epoch ms, if the page exposed one (e.g. JSON-LD datePosted). */
+  postedAt?: number;
 }
 
 /* ----------------------------- Applications ------------------------------ */

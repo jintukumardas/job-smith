@@ -344,6 +344,10 @@ button.tiny {
   color: var(--warn);
 }
 
+.warn-text {
+  color: var(--warn);
+}
+
 .note.ok {
   background: var(--okbg);
   color: var(--ok);

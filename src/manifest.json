@@ -11,9 +11,15 @@
     "https://remoteok.com/*",
     "https://weworkremotely.com/*",
     "https://hn.algolia.com/*",
+    "https://boards-api.greenhouse.io/*",
+    "https://api.lever.co/*",
+    "https://api.ashbyhq.com/*",
+    "https://api.smartrecruiters.com/*",
+    "https://*.myworkdayjobs.com/*",
     "https://*.huggingface.co/*",
     "https://raw.githubusercontent.com/*"
   ],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
   "background": {
     "service_worker": "service-worker.js"
   },

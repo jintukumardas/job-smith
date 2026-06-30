@@ -13,6 +13,7 @@ import {
 import { sendToBackground } from "../lib/messaging.js";
 import { PROVIDERS } from "../jobs/providers/index.js";
 import { buildDiscoverySearches } from "../jobs/discovery.js";
+import { parseCustomSource, requiredOrigin } from "../jobs/custom-source.js";
 import { resetEngineCache, tailorResume } from "../resume/tailor.js";
 import { parseResumeText } from "../resume/parse-resume.js";
 import { parseResumeWithLlm, mergeParsed, applyParsedToResume } from "../resume/parse-resume-llm.js";
@@ -276,6 +277,17 @@ function renderJobs(): HTMLElement {
         "Matched against the listing's location. e.g. worldwide, anywhere, global, india, remote",
       ),
       checkRow("Remote only", "Skip anything not flagged remote.", js.remoteOnly, (v) => (js.remoteOnly = v)),
+      checkRow(
+        "Show all jobs from custom sources",
+        "Custom sources you add below ignore the Roles / Locations / Remote-only filters above (you added the company on purpose). Exclude-keywords and the age limit still apply.",
+        js.customBypassFilters,
+        (v) => (js.customBypassFilters = v),
+      ),
+      field(
+        "Hide listings older than (days)",
+        numberInput(js.maxAgeDays, (v) => (js.maxAgeDays = Math.max(0, Math.round(v) || 0)), { min: 0, max: 365 }),
+        "Drops stale postings with a known date older than this. 0 = no limit. Listings with no date are always kept.",
+      ),
       field(
         "Check for new jobs every (minutes)",
         numberInput(js.pollFrequencyMinutes, (v) => (js.pollFrequencyMinutes = v), { min: 15, max: 1440 }),
@@ -283,10 +295,11 @@ function renderJobs(): HTMLElement {
       ),
     ),
     providersCard,
+    customSourcesCard(),
     discoveryCard(),
     saveBar(
       "Save & reschedule",
-      (s) => void persist(s, { reschedule: true }),
+      (s) => void saveJobs(s),
       h("button", {
         class: "secondary",
         text: "Poll now",
@@ -369,6 +382,182 @@ function discoveryCard(): HTMLElement {
     ),
     list,
   );
+}
+
+/**
+ * Add your own career-page / feed URLs. Greenhouse, Lever and Ashby boards are
+ * detected automatically (their public JSON APIs); anything else is treated as
+ * an RSS/Atom feed. RSS feeds on new hosts need site access, requested on Save.
+ */
+function customSourcesCard(): HTMLElement {
+  const js = settings.jobSearch;
+  const list = h("div", {});
+
+  const renderList = (): void => {
+    clear(list);
+    if (js.customSources.length === 0) {
+      list.appendChild(h("p", { class: "muted small", text: "No custom sources yet." }));
+    }
+    js.customSources.forEach((src, i) => {
+      const hint = h("div", { class: "small muted", style: { marginTop: "2px" } });
+      const refreshHint = (): void => {
+        hint.textContent = describeSource(src.url);
+        hint.className = `small ${js.customSources[i].url.trim() && hint.textContent.startsWith("⚠") ? "warn-text" : "muted"}`;
+      };
+      const testStatus = h("span", { class: "flash" });
+      const urlInput = textInput(src.url, (v) => {
+        src.url = v;
+        refreshHint();
+      });
+
+      const testBtn = h("button", { class: "secondary tiny", text: "Test / auto-detect" });
+      testBtn.addEventListener("click", async () => {
+        if (!src.url.trim()) {
+          flash(testStatus, "Enter a URL first.", "err");
+          return;
+        }
+        // A generic page needs site access before the background can fetch it.
+        const origin = requiredOrigin(src.url);
+        if (origin && chrome.permissions?.request) {
+          try {
+            await chrome.permissions.request({ origins: [origin] });
+          } catch (e) {
+            log.warn("permission request failed", e);
+          }
+        }
+        testBtn.disabled = true;
+        const prev = testBtn.textContent;
+        testBtn.textContent = "Testing…";
+        flash(testStatus, "Testing…", "ok");
+        const resp = await sendToBackground({ type: "RESOLVE_CUSTOM_SOURCE", url: src.url, label: src.label });
+        testBtn.disabled = false;
+        testBtn.textContent = prev ?? "Test / auto-detect";
+        if (resp.type !== "RESOLVE_RESULT") {
+          flash(testStatus, "Test failed — see the activity log.", "err");
+          return;
+        }
+        if (!resp.ok) {
+          flash(testStatus, resp.error ?? "No jobs found.", "err");
+          return;
+        }
+        const eg = resp.samples.length ? ` e.g. ${resp.samples.slice(0, 2).join("; ")}` : "";
+        if (resp.suggestedUrl && resp.suggestedUrl !== src.url) {
+          // Auto-apply the detected board URL in place (keeps this row + status).
+          src.url = resp.suggestedUrl;
+          (urlInput as HTMLInputElement).value = resp.suggestedUrl;
+          refreshHint();
+          flash(
+            testStatus,
+            `Detected ${resp.detected} (${resp.count} jobs) — URL updated. Click “Save & reschedule”, then Refresh.${eg}`,
+            "ok",
+          );
+        } else {
+          flash(testStatus, `✓ ${resp.count} jobs found.${eg}`, "ok");
+        }
+      });
+
+      list.appendChild(
+        h(
+          "div",
+          { class: "list-item" },
+          h("button", {
+            class: "secondary tiny remove",
+            text: "✕",
+            onclick: () => {
+              js.customSources.splice(i, 1);
+              renderList();
+            },
+          }),
+          h(
+            "div",
+            { class: "grid-2" },
+            field("Label (company / board name)", textInput(src.label, (v) => (src.label = v))),
+            field("Career page / feed URL", urlInput),
+          ),
+          checkRow("Enabled", "", src.enabled, (v) => (src.enabled = v)),
+          hint,
+          h("div", { class: "toolbar" }, testBtn, testStatus),
+        ),
+      );
+      refreshHint();
+    });
+  };
+  renderList();
+
+  return card(
+    "Custom sources",
+    h("div", {
+      class: "note info small",
+      text: "Track company career pages. Paste any careers URL and click “Test / auto-detect”: Greenhouse / Lever / Ashby / SmartRecruiters boards use their public API, and for a JavaScript career page (like many big companies) JobSmith probes for the ATS behind it and offers the working board URL. Plain RSS/Atom feeds and static HTML pages are read directly. Your search criteria above still apply — so to see on-site roles, turn off “Remote only” and add the city to Locations.",
+    }),
+    list,
+    h(
+      "div",
+      { class: "toolbar" },
+      h("button", {
+        class: "secondary",
+        text: "+ Add source",
+        onclick: () => {
+          js.customSources.push({ id: uid("src"), label: "", url: "", enabled: true });
+          renderList();
+        },
+      }),
+    ),
+  );
+}
+
+/** A short, human-readable detection result for a pasted source URL. */
+function describeSource(url: string): string {
+  if (!url.trim()) return "Paste a board URL (Greenhouse/Lever/Ashby) or an RSS/Atom feed URL.";
+  const resolved = parseCustomSource(url);
+  if ("error" in resolved) return `⚠ ${resolved.error}`;
+  const names: Record<string, string> = {
+    greenhouse: "Greenhouse board",
+    lever: "Lever board",
+    ashby: "Ashby board",
+    smartrecruiters: "SmartRecruiters board",
+    workday: "Workday board",
+    page: "Career page (RSS feed or HTML — use Test to auto-detect the ATS)",
+  };
+  return `Detected: ${names[resolved.kind]}.`;
+}
+
+/**
+ * Save the job-search settings. RSS feeds on hosts we don't already permit need
+ * an optional host permission; we request it here (still inside the Save click's
+ * user gesture) before persisting so the background poll can fetch them.
+ */
+async function saveJobs(status: HTMLElement): Promise<void> {
+  const origins = neededFeedOrigins();
+  if (origins.length && chrome.permissions?.request) {
+    try {
+      const granted = await chrome.permissions.request({ origins });
+      if (!granted) {
+        flash(
+          status,
+          "Saved, but JobSmith can't fetch the custom feed(s) without site access. Save again and click Allow, or remove them.",
+          "err",
+        );
+        await saveSettings(settings);
+        await sendToBackground({ type: "RESCHEDULE" });
+        return;
+      }
+    } catch (e) {
+      log.warn("host permission request failed", e);
+    }
+  }
+  await persist(status, { reschedule: true });
+}
+
+/** Distinct origins (RSS feeds only) the enabled custom sources need access to. */
+function neededFeedOrigins(): string[] {
+  const set = new Set<string>();
+  for (const src of settings.jobSearch.customSources) {
+    if (!src.enabled) continue;
+    const origin = requiredOrigin(src.url);
+    if (origin) set.add(origin);
+  }
+  return [...set];
 }
 
 /* --------------------------------- Resume -------------------------------- */
@@ -1326,7 +1515,7 @@ function renderPrivacy(): HTMLElement {
         "ul",
         {},
         liText("100% local. No accounts, no servers, no analytics. Your resume and personal data never leave this browser."),
-        liText("Only official, public job APIs/feeds are used — no scraping of sites that forbid it."),
+        liText("Built-in sources are official public APIs/feeds. Custom sources you add — and the “Scan this page” action — may read a career page's HTML on-device; use them only on sites whose terms allow it."),
         liText("Polite, rate-limited polling that respects each source's terms (the anti-blacklist guarantee)."),
         liText("Autofill never submits forms, never clicks buttons, and never overwrites values you typed."),
         liText("A visible disclosure is shown in-page whenever autofill runs."),

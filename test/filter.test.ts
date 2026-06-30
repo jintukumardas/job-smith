@@ -69,6 +69,60 @@ describe("matchesJob", () => {
     expect(matchesJob(makeJob({ descriptionText: "we use java" }), withKw).match).toBe(false);
     expect(matchesJob(makeJob({ descriptionText: "we use python" }), withKw).match).toBe(true);
   });
+
+  it("rejects listings older than maxAgeDays (the stale-job cutoff)", () => {
+    const now = 1_700_000_000_000;
+    const withAge: MatchCriteria = { ...criteria, maxAgeDays: 45 };
+    const old = makeJob({ fetchedAt: now, postedAt: now - 400 * 86_400_000 }); // ~13 months
+    const fresh = makeJob({ fetchedAt: now, postedAt: now - 5 * 86_400_000 });
+    expect(matchesJob(old, withAge).match).toBe(false);
+    expect(matchesJob(fresh, withAge).match).toBe(true);
+  });
+
+  it("keeps listings with no known date even when maxAgeDays is set", () => {
+    const withAge: MatchCriteria = { ...criteria, maxAgeDays: 45 };
+    expect(matchesJob(makeJob({ postedAt: undefined }), withAge).match).toBe(true);
+  });
+
+  it("does not apply a cutoff when maxAgeDays is 0", () => {
+    const now = 1_700_000_000_000;
+    const noLimit: MatchCriteria = { ...criteria, maxAgeDays: 0 };
+    const old = makeJob({ fetchedAt: now, postedAt: now - 400 * 86_400_000 });
+    expect(matchesJob(old, noLimit).match).toBe(true);
+  });
+
+  it("custom-source jobs bypass role/location/remote when bypassCustom is set", () => {
+    const c: MatchCriteria = {
+      roles: ["Software Engineer"],
+      keywords: [],
+      excludeKeywords: ["crypto"],
+      locations: ["india"],
+      remoteOnly: true,
+      bypassCustom: true,
+    };
+    // On-site, off-role, non-matching location — still passes because it's custom.
+    const custom = makeJob({ source: "custom", title: "Group Product Manager", location: "Bengaluru", remote: false });
+    expect(matchesJob(custom, c).match).toBe(true);
+    // The same listing from a built-in provider is still filtered out.
+    const builtin = makeJob({ source: "remotive", title: "Group Product Manager", location: "Bengaluru", remote: false });
+    expect(matchesJob(builtin, c).match).toBe(false);
+    // Exclude keywords still disqualify custom jobs.
+    const excluded = makeJob({ source: "custom", title: "Engineer", descriptionText: "a crypto role", remote: false });
+    expect(matchesJob(excluded, c).match).toBe(false);
+  });
+
+  it("custom jobs are filtered normally when bypassCustom is off", () => {
+    const c: MatchCriteria = {
+      roles: ["Software Engineer"],
+      keywords: [],
+      excludeKeywords: [],
+      locations: ["india"],
+      remoteOnly: true,
+      bypassCustom: false,
+    };
+    const custom = makeJob({ source: "custom", title: "Group Product Manager", location: "Bengaluru", remote: false });
+    expect(matchesJob(custom, c).match).toBe(false);
+  });
 });
 
 describe("filterJobs", () => {
