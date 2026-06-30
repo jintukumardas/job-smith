@@ -53,6 +53,7 @@ export function isRemoteLocation(location: string): boolean {
 
 export interface BuildJobInput {
   source: string;
+  sourceId?: string;
   sourceLabel: string;
   title: string;
   company: string;
@@ -90,6 +91,7 @@ export function buildJob(input: BuildJobInput): Job {
     tags: uniqCi(input.tags ?? []).slice(0, 25),
     fetchedAt: input.now,
   };
+  if (input.sourceId) job.sourceId = input.sourceId;
   if (input.applyUrl) job.applyUrl = input.applyUrl.trim();
   if (input.salary) job.salary = input.salary.trim();
   if (typeof input.postedAt === "number" && Number.isFinite(input.postedAt)) {

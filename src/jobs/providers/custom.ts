@@ -54,21 +54,32 @@ export async function fetchCustomSource(source: CustomSource, ctx: ProviderConte
   if ("error" in resolved) {
     throw new Error(resolved.error);
   }
+  let jobs: Job[];
   switch (resolved.kind) {
     case "greenhouse":
-      return fetchGreenhouse(source, resolved, ctx);
+      jobs = await fetchGreenhouse(source, resolved, ctx);
+      break;
     case "lever":
-      return fetchLever(source, resolved, ctx);
+      jobs = await fetchLever(source, resolved, ctx);
+      break;
     case "ashby":
-      return fetchAshby(source, resolved, ctx);
+      jobs = await fetchAshby(source, resolved, ctx);
+      break;
     case "smartrecruiters":
-      return fetchSmartRecruiters(source, resolved, ctx);
+      jobs = await fetchSmartRecruiters(source, resolved, ctx);
+      break;
     case "workday":
-      return fetchWorkday(source, resolved, ctx);
+      jobs = await fetchWorkday(source, resolved, ctx);
+      break;
     case "page":
     default:
-      return fetchPage(source, resolved, ctx);
+      jobs = await fetchPage(source, resolved, ctx);
+      break;
   }
+  // Tag every listing with its originating source so the cache can be pruned
+  // exactly when the user deletes that source (see reconcileCustomJobs).
+  for (const job of jobs) job.sourceId = source.id;
+  return jobs;
 }
 
 /** Fetch ATS jobs for a known kind + endpoint (used by the auto-detect probe). */

@@ -5,6 +5,7 @@
  */
 import type {
   Application,
+  CustomSource,
   Job,
   ProviderState,
   Settings,
@@ -129,6 +130,32 @@ export async function getJobsCache(): Promise<Job[]> {
 
 export async function setJobsCache(jobs: Job[]): Promise<void> {
   await rawSet("jobsCache", jobs.slice(0, JOBS_CACHE_CAP));
+}
+
+/**
+ * Drop cached custom-source listings that no longer belong to a configured
+ * source. Polling only refreshes sources that still exist, so a deleted source's
+ * jobs would otherwise linger in the cache (and in the popup's source filter)
+ * indefinitely. Call this after the custom-source list changes.
+ *
+ * Listings are matched by {@link Job.sourceId}; legacy listings cached before
+ * that field existed fall back to matching the source's label. Non-custom
+ * listings are always retained. Returns the number of jobs removed.
+ */
+export async function reconcileCustomJobs(sources: CustomSource[]): Promise<number> {
+  const cache = await getJobsCache();
+  const ids = new Set(sources.map((s) => s.id));
+  const labels = new Set(sources.map((s) => s.label.trim()).filter(Boolean));
+  const kept = cache.filter((job) => {
+    if (job.source !== "custom") return true;
+    if (job.sourceId) return ids.has(job.sourceId);
+    return labels.has(job.sourceLabel);
+  });
+  if (kept.length !== cache.length) {
+    await rawSet("jobsCache", kept);
+    log.debug(`pruned ${cache.length - kept.length} job(s) from removed custom sources`);
+  }
+  return cache.length - kept.length;
 }
 
 /* ----------------------------- Provider state ---------------------------- */

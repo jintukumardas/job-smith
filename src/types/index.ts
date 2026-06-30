@@ -198,6 +198,9 @@ export interface Job {
   id: string;
   /** Provider id, e.g. "remotive". */
   source: string;
+  /** Custom-source id this listing came from, when source === "custom". Lets us
+   *  prune cached jobs exactly when the user deletes that custom source. */
+  sourceId?: string;
   /** Human-readable source name, e.g. "Remotive". */
   sourceLabel: string;
   title: string;

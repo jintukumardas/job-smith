@@ -22,6 +22,7 @@ import {
   getSettings,
   getRemindedFollowUps,
   markJobsSeen,
+  reconcileCustomJobs,
   saveSettings,
   setJobsCache,
   setProviderState,
@@ -97,6 +98,10 @@ onBackgroundMessage(async (req): Promise<BgResponse> => {
       return { type: "POLL_RESULT", ...r };
     }
     case "RESCHEDULE": {
+      // The settings (incl. custom sources) just changed. Drop cached jobs from
+      // any source the user removed so they stop showing up after a refresh.
+      const settings = await getSettings();
+      await reconcileCustomJobs(settings.jobSearch.customSources ?? []);
       await scheduleAlarms();
       return { type: "OK" };
     }
@@ -540,13 +545,19 @@ async function addDetectedSource(
 ): Promise<BgResponse> {
   const settings = await getSettings();
   const sources = settings.jobSearch.customSources ?? [];
-  if (!sources.some((s) => s.url === url)) {
-    sources.push({ id: uid("src"), label: label || url, url, enabled: true });
+  let source = sources.find((s) => s.url === url);
+  if (!source) {
+    source = { id: uid("src"), label: label || url, url, enabled: true };
+    sources.push(source);
     settings.jobSearch.customSources = sources;
   }
   settings.jobSearch.providers.custom = true;
   await saveSettings(settings);
   await scheduleAlarms();
+
+  // These were fetched with a throwaway id; stamp the persisted source id so the
+  // cache reconcile keeps them (see reconcileCustomJobs).
+  for (const job of jobs) job.sourceId = source.id;
 
   // Surface the jobs now so the user sees them without waiting for a poll.
   const prior = await getJobsCache();
